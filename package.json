@@ -1,0 +1,20 @@
+{
+  "name": "moneys3-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Money S3 accounting — invoices, contacts, stock, banking, payroll via GraphQL",
+  "type": "module",
+  "main": "dist/index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
