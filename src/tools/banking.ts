@@ -35,10 +35,12 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
       take: z.number().min(1).max(100).default(20),
       skip: z.number().min(0).default(0),
       where: z.string().optional().describe("GraphQL where filter"),
+      order: z.string().optional().describe("GraphQL order clause"),
     },
-    async ({ take, skip, where }) => {
+    async ({ take, skip, where, order }) => {
       const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
       if (where) parts.push(`where: ${where}`);
+      if (order) parts.push(`order: ${order}`);
 
       const gql = `{ bankDocuments(${parts.join(", ")}) { ${DOC_FIELDS} } }`;
       const data = await m3.query<{ bankDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
@@ -58,10 +60,12 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
       take: z.number().min(1).max(100).default(20),
       skip: z.number().min(0).default(0),
       where: z.string().optional().describe("GraphQL where filter"),
+      order: z.string().optional().describe("GraphQL order clause"),
     },
-    async ({ take, skip, where }) => {
+    async ({ take, skip, where, order }) => {
       const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
       if (where) parts.push(`where: ${where}`);
+      if (order) parts.push(`order: ${order}`);
 
       const gql = `{ cashDeskDocuments(${parts.join(", ")}) { ${DOC_FIELDS} } }`;
       const data = await m3.query<{ cashDeskDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
@@ -78,7 +82,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_bank_document",
     "Create a bank document (payment). Async import queue.",
     {
-      dateOfIssue: z.string().describe("Date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
       totalAmount: z.number().describe("Total amount with VAT"),
       variableSymbol: z.string().optional(),
@@ -116,7 +120,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_cash_desk_document",
     "Create a cash desk (register) document. Async import queue.",
     {
-      dateOfIssue: z.string().describe("Date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
       totalAmount: z.number().describe("Total amount with VAT"),
       text: z.string().optional().describe("Description/note"),

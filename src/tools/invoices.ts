@@ -110,9 +110,9 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_issued_invoice",
     "Create a new issued (outgoing) invoice in Money S3. Written to async import queue.",
     {
-      dateOfIssue: z.string().describe("Issue date (DD.MM.YYYY)"),
-      dateOfTaxing: z.string().describe("Tax date (DD.MM.YYYY)"),
-      dateOfMaturity: z.string().describe("Maturity date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Issue date (DD.MM.YYYY)"),
+      dateOfTaxing: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Tax date (DD.MM.YYYY)"),
+      dateOfMaturity: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional().describe("Document number (auto-generated if omitted)"),
       numericalSeriePrefix: z.string().default("").describe("Numerical series prefix"),
       items: z.array(z.object({
@@ -125,7 +125,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, items, definitionShortcut }) => {
       const itemsGql = items.map((it) =>
-        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: ${it.vatRate}` : ""}, warrantyType: CONSTANT, isInverse: false }`
+        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: "${escGql(it.vatRate)}"` : ""}, warrantyType: CONSTANT, isInverse: false }`
       ).join(", ");
 
       const docNum = documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "";
@@ -154,9 +154,9 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_received_invoice",
     "Create a new received (incoming) invoice in Money S3. Written to async import queue.",
     {
-      dateOfIssue: z.string().describe("Issue date (DD.MM.YYYY)"),
-      dateOfTaxing: z.string().describe("Tax date (DD.MM.YYYY)"),
-      dateOfMaturity: z.string().describe("Maturity date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Issue date (DD.MM.YYYY)"),
+      dateOfTaxing: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Tax date (DD.MM.YYYY)"),
+      dateOfMaturity: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional().describe("Document number"),
       numericalSeriePrefix: z.string().default("").describe("Numerical series prefix"),
       items: z.array(z.object({
@@ -169,7 +169,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, items, definitionShortcut }) => {
       const itemsGql = items.map((it) =>
-        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: ${it.vatRate}` : ""}, warrantyType: CONSTANT, isInverse: false }`
+        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: "${escGql(it.vatRate)}"` : ""}, warrantyType: CONSTANT, isInverse: false }`
       ).join(", ");
 
       const docNum = documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "";

@@ -79,10 +79,12 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       take: z.number().min(1).max(100).default(20).describe("Number of records"),
       skip: z.number().min(0).default(0).describe("Records to skip"),
       where: z.string().optional().describe("GraphQL where filter"),
+      order: z.string().optional().describe("GraphQL order clause"),
     },
-    async ({ take, skip, where }) => {
+    async ({ take, skip, where, order }) => {
       const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
       if (where) parts.push(`where: ${where}`);
+      if (order) parts.push(`order: ${order}`);
 
       const gql = `{ stockDocuments(${parts.join(", ")}) {
         items {
@@ -142,4 +144,73 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       return { content: [{ type: "text", text: `Stock card "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
     },
   );
+
+  server.tool(
+    "m3_create_stock_document",
+    "Create a stock/warehouse document (receipt or dispatch). Async import queue.",
+    {
+      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Date (DD.MM.YYYY)"),
+      documentNumber: z.string().optional(),
+      partnerName: z.string().optional().describe("Partner company name"),
+      items: z.array(z.object({
+        description: z.string(),
+        amount: z.number().min(0),
+        unitPriceHc: z.number(),
+      })).min(1).describe("Document line items"),
+      definitionShortcut: z.string().default("_SD").describe("XML transfer definition shortcut"),
+    },
+    async (params) => {
+      const itemsGql = params.items.map((it) =>
+        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc} }`
+      ).join(", ");
+
+      const partner = params.partnerName
+        ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" } }`
+        : "";
+      const docNum = params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "";
+
+      const gql = `mutation {
+  createStockDocument(
+    stockDocument: {
+      dateOfIssue: "${escGql(params.dateOfIssue)}"
+      ${docNum}
+      ${partner}
+      items: [${itemsGql}]
+    }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
+  ) { guid isSuccess }
+}`;
+
+      const data = await m3.query<{ createStockDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+      const result = data.createStockDocument;
+      return { content: [{ type: "text", text: `Stock document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+    },
+  );
+
+  server.tool(
+    "m3_create_inventory_document",
+    "Create an inventory/stocktaking document. Async import queue.",
+    {
+      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Date (DD.MM.YYYY)"),
+      documentNumber: z.string().optional(),
+      definitionShortcut: z.string().default("_INV").describe("XML transfer definition shortcut"),
+    },
+    async (params) => {
+      const docNum = params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "";
+      const gql = `mutation {
+  createInventoryDocument(
+    inventoryDocument: {
+      dateOfIssue: "${escGql(params.dateOfIssue)}"
+      ${docNum}
+    }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
+  ) { guid isSuccess }
+}`;
+
+      const data = await m3.query<{ createInventoryDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+      const result = data.createInventoryDocument;
+      return { content: [{ type: "text", text: `Inventory document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+    },
+  );
+
 }

@@ -2,7 +2,7 @@
 
 MCP server for [Money S3](https://money.cz/) — the Czech/Slovak accounting system by Seyfor. Connects any MCP-compatible AI client to your Money S3 data via the official GraphQL API.
 
-**39 tools** across 10 categories covering invoices, contacts, stock, banking, payroll, accounting, and more.
+**43 tools** across 10 categories covering invoices, contacts, stock, banking, payroll, accounting, and more.
 
 ## Prerequisites
 
@@ -145,7 +145,7 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 | `m3_create_address` | Create address book entry (async queue) |
 | `m3_delete_address` | Delete address book entry |
 
-### Stock & Inventory (5 tools)
+### Stock & Inventory (7 tools)
 
 | Tool | Description |
 |---|---|
@@ -153,7 +153,9 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 | `m3_stock_lists` | List warehouses and price levels (read-only) |
 | `m3_stock_documents` | Query stock documents (receipts, dispatches) |
 | `m3_create_stock_card` | Create a stock card (async queue) |
+| `m3_create_stock_document` | Create a stock document (async queue) |
 | `m3_inventory_documents` | Query inventory/stocktaking documents |
+| `m3_create_inventory_document` | Create an inventory document (async queue) |
 
 ### Banking (5 tools)
 
@@ -165,7 +167,7 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 | `m3_create_cash_desk_document` | Create cash desk document (async queue) |
 | `m3_bank_accounts` | List bank accounts and cash desks (read-only) |
 
-### Documents (4 tools)
+### Documents (6 tools)
 
 | Tool | Description |
 |---|---|
@@ -173,6 +175,8 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 | `m3_liabilities` | Query liabilities (payables) |
 | `m3_receivables` | Query receivables |
 | `m3_create_internal_document` | Create internal document (async queue) |
+| `m3_create_liability` | Create a liability/payable (async queue) |
+| `m3_create_receivable` | Create a receivable (async queue) |
 
 ### Accounting (3 tools)
 
@@ -244,9 +248,9 @@ src/
     ├── agendas.ts        # Agenda selection (2)
     ├── invoices.ts       # Issued/received invoices (5)
     ├── contacts.ts       # Address book (3)
-    ├── stock.ts          # Stock cards, lists, documents (5)
+    ├── stock.ts          # Stock cards, lists, documents, inventory (7)
     ├── banking.ts        # Bank & cash desk documents (5)
-    ├── documents.ts      # Internal docs, liabilities, receivables, inventory (4)
+    ├── documents.ts      # Internal docs, liabilities, receivables (6)
     ├── accounting.ts     # Journal, chart of accounts, entries (3)
     ├── payroll.ts        # Employees, payroll, service (3)
     ├── controlling.ts    # Cost centers, projects, activities (6)
@@ -263,6 +267,7 @@ src/
 - Actionable error messages with context-aware recovery hints
 - Response caching with configurable TTL and mutation-based invalidation
 - No credentials logged or exposed in error messages
+- Date format validation (DD.MM.YYYY regex) on all create tools
 - Raw GraphQL tool limited to 10KB query size
 
 ## Tech Stack
