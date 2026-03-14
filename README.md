@@ -131,68 +131,70 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 
 | Tool | Description |
 |---|---|
-| `m3_issued_invoices` | Query issued (outgoing) invoices with filtering and pagination |
-| `m3_received_invoices` | Query received (incoming) invoices |
-| `m3_create_issued_invoice` | Create an issued invoice (async queue) |
-| `m3_create_received_invoice` | Create a received invoice (async queue) |
+| `m3_issued_invoices` | Query issued invoices with VAT breakdown, payment status, controlling variables |
+| `m3_received_invoices` | Query received invoices with VAT breakdown, payment status, controlling variables |
+| `m3_create_issued_invoice` | Create an issued invoice with line items, credit note flag, controlling vars |
+| `m3_create_received_invoice` | Create a received invoice with line items, controlling vars |
 | `m3_delete_invoice` | Delete an invoice by ID and year |
 
 ### Address Book (3 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_address_book` | Query contacts/partners with filtering |
-| `m3_create_address` | Create address book entry (async queue) |
+| `m3_address_book` | Query contacts with bank accounts, credit limits, discount, maturity terms |
+| `m3_create_address` | Create contact with banking, credit limit, VAT payer flag, maturity terms |
 | `m3_delete_address` | Delete address book entry |
 
 ### Stock & Inventory (7 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_stock_cards` | Query stock/inventory cards (products) |
-| `m3_stock_lists` | List warehouses and price levels (read-only) |
-| `m3_stock_documents` | Query stock documents (receipts, dispatches) |
-| `m3_create_stock_card` | Create a stock card (async queue) |
-| `m3_create_stock_document` | Create a stock document (async queue) |
-| `m3_inventory_documents` | Query inventory/stocktaking documents |
-| `m3_create_inventory_document` | Create an inventory document (async queue) |
+| `m3_stock_cards` | Query stock cards with pricing, barcodes, weight, warranty, categories, stock levels |
+| `m3_stock_lists` | List warehouses and price levels |
+| `m3_stock_documents` | Query stock docs with controlling vars, serial numbers, warehouse, discount |
+| `m3_create_stock_card` | Create stock card with barcode, weight, warranty, min/max stock, categories |
+| `m3_create_stock_document` | Create stock doc with controlling vars, serial numbers, warehouse |
+| `m3_inventory_documents` | Query inventory docs with expected vs real amounts and differences |
+| `m3_create_inventory_document` | Create inventory document with warehouse selection |
 
 ### Banking (5 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_bank_documents` | Query bank documents (payments) |
-| `m3_cash_desk_documents` | Query cash desk documents |
-| `m3_create_bank_document` | Create bank document (async queue) |
-| `m3_create_cash_desk_document` | Create cash desk document (async queue) |
-| `m3_bank_accounts` | List bank accounts and cash desks (read-only) |
+| `m3_bank_documents` | Query bank docs with VAT breakdown, payment status, controlling variables |
+| `m3_cash_desk_documents` | Query cash desk docs with VAT breakdown, payment status, controlling variables |
+| `m3_create_bank_document` | Create bank doc with all symbols (VS/KS/SS), partner ICO, controlling vars |
+| `m3_create_cash_desk_document` | Create cash desk doc with controlling vars |
+| `m3_bank_accounts` | List bank accounts with IBAN/SWIFT and cash desks |
 
-### Documents (6 tools)
+### Documents (8 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_internal_documents` | Query internal documents |
-| `m3_liabilities` | Query liabilities (payables) |
-| `m3_receivables` | Query receivables |
-| `m3_create_internal_document` | Create internal document (async queue) |
-| `m3_create_liability` | Create a liability/payable (async queue) |
-| `m3_create_receivable` | Create a receivable (async queue) |
+| `m3_internal_documents` | Query internal docs with VAT, payment status, controlling variables |
+| `m3_liabilities` | Query liabilities with maturity dates, VAT, payment status, controlling vars |
+| `m3_receivables` | Query receivables with maturity dates, VAT, payment status, controlling vars |
+| `m3_inventory_documents` | Query inventory documents |
+| `m3_create_internal_document` | Create internal doc with controlling vars |
+| `m3_create_liability` | Create liability with maturity date, partner ICO, controlling vars |
+| `m3_create_receivable` | Create receivable with maturity date, partner ICO, controlling vars |
+| `m3_delete_invoice` | Delete invoice |
 
 ### Accounting (3 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_accounting_journal` | Query accounting/cash journal (read-only) |
-| `m3_chart_of_accounts` | Query chart of accounts |
-| `m3_predefined_entries` | Query predefined accounting entries |
+| `m3_accounting_journal` | Query journal with controlling variables per entry |
+| `m3_chart_of_accounts` | Query chart of accounts with analytical groups |
+| `m3_predefined_entries` | Query predefined entries with descriptions |
 
 ### Payroll & HR (3 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_employees` | Query employees (read-only) |
-| `m3_payroll` | Query payroll records (read-only) |
-| `m3_service_repairs` | Query service/repair records (read-only) |
+| `m3_employees` | Query employees with employment dates, cost center, employment type |
+| `m3_payroll` | Query payroll with employer contributions, cost center |
+| `m3_service_repairs` | Query service/repair records with line items, cost center |
 
 ### Controlling (6 tools)
 
@@ -220,6 +222,20 @@ Money S3 operations follow two patterns:
 - **Reading** — real-time GraphQL queries with `take`/`skip` pagination and HotChocolate-style `where`/`order` filtering
 - **Writing** — asynchronous mutations that go into an import queue; returns a GUID to track processing status
 
+### What's Queried per Entity
+
+Every read tool now requests the maximum useful field set inspired by the [Money S3 XSD schemas](https://github.com/parobok/moneys3/tree/master/xsd):
+
+- **Invoices** — full partner address, VAT summary (base + tax per rate), payment status, credit note flag, line items with discount, controlling variables (cost center / project / activity), account assignment
+- **Contacts** — business + invoice addresses, bank accounts with IBAN/SWIFT, discount, credit limit, default maturity days, VAT payer flag, partner groups
+- **Banking/Cash desk** — VAT summary, remaining to pay, payment date, controlling variables, line items
+- **Documents** — VAT summary, maturity date, payment tracking, controlling variables, line items
+- **Stock cards** — EAN/barcode, weight/volume, min/max stock, warranty, supplier, category/group, warehouse, all pricing tiers
+- **Stock documents** — warehouse, serial numbers, discount, controlling variables
+- **Employees** — entry/departure dates, employment type, cost center, mobile contact
+- **Payroll** — employer social/health insurance contributions, cost center
+- **Accounting journal** — controlling variables per entry, predefined entry reference
+
 ### Filtering Examples
 
 Invoices from a specific date:
@@ -237,6 +253,12 @@ Sort by date descending:
 order: { dateOfIssue: DESC }
 ```
 
+Unpaid receivables:
+```
+where: { isSettled: { eq: false } }
+order: { dateOfMaturity: ASC }
+```
+
 ## Architecture
 
 ```
@@ -245,17 +267,20 @@ src/
 ├── moneys3-client.ts     # GraphQL client with OAuth2, retry, cache
 ├── cache.ts              # TTL-based response cache
 └── tools/
+    ├── helpers.ts        # escGql utility for injection prevention
     ├── agendas.ts        # Agenda selection (2)
     ├── invoices.ts       # Issued/received invoices (5)
     ├── contacts.ts       # Address book (3)
     ├── stock.ts          # Stock cards, lists, documents, inventory (7)
     ├── banking.ts        # Bank & cash desk documents (5)
-    ├── documents.ts      # Internal docs, liabilities, receivables (6)
+    ├── documents.ts      # Internal docs, liabilities, receivables (8)
     ├── accounting.ts     # Journal, chart of accounts, entries (3)
     ├── payroll.ts        # Employees, payroll, service (3)
     ├── controlling.ts    # Cost centers, projects, activities (6)
     └── graphql.ts        # Raw GraphQL, connection test, orders (3)
 ```
+
+Total: ~2,200 lines of TypeScript.
 
 ## Security
 
@@ -267,6 +292,7 @@ src/
 - Actionable error messages with context-aware recovery hints
 - Response caching with configurable TTL and mutation-based invalidation
 - No credentials logged or exposed in error messages
+- GraphQL string escaping (`escGql`) on all user-provided mutation parameters
 - Date format validation (DD.MM.YYYY regex) on all create tools
 - Raw GraphQL tool limited to 10KB query size
 

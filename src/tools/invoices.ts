@@ -3,18 +3,30 @@ import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
 import { escGql } from "./helpers.js";
 
+const DATE_RE = /^\d{2}\.\d{2}\.\d{4}$/;
+const DATE_MSG = "Expected DD.MM.YYYY format";
+
 const INVOICE_FIELDS = `
   items {
-    id dateOfIssue dateOfTaxing dateOfMaturity
+    id dateOfIssue dateOfTaxing dateOfMaturity dateOfPayment
     documentNumber variableSymbol constantSymbol specificSymbol
     totalPriceHcWithVat totalPriceHcWithoutVat
+    remainingToPay isSettled isCreditNote
     currency { code }
+    vatSummary {
+      baseZeroRate baseReducedRate baseStandardRate
+      vatReducedRate vatStandardRate
+    }
     partnerAddress {
       businessAddress { name street city zip country }
       company { identificationNumber vatNumber }
     }
-    items { description plu amount unitPriceHc vatRate }
-    text
+    items { description plu amount unitPriceHc vatRate discount }
+    costCenter { code name }
+    project { code name }
+    activity { code name }
+    account predefinedEntry
+    text note
   }
   totalCount
 `;
@@ -34,31 +46,53 @@ function formatInvoice(inv: Record<string, unknown>): string {
   const co = partner?.company as Record<string, unknown> | undefined;
   const items = inv.items as Array<Record<string, unknown>> | undefined;
   const cur = inv.currency as Record<string, unknown> | undefined;
+  const vat = inv.vatSummary as Record<string, unknown> | undefined;
+  const cc = inv.costCenter as Record<string, unknown> | undefined;
+  const proj = inv.project as Record<string, unknown> | undefined;
+  const act = inv.activity as Record<string, unknown> | undefined;
 
   const lines = [
-    `## ${inv.documentNumber ?? "—"}`,
+    `## ${inv.documentNumber ?? "—"}${inv.isCreditNote ? " [CREDIT NOTE]" : ""}`,
     `- Date: ${inv.dateOfIssue ?? "—"} | Taxing: ${inv.dateOfTaxing ?? "—"} | Maturity: ${inv.dateOfMaturity ?? "—"}`,
     `- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"}, VAT: ${co?.vatNumber ?? "—"})`,
     `- Address: ${[biz?.street, biz?.city, biz?.zip, biz?.country].filter(Boolean).join(", ") || "—"}`,
     `- VS: ${inv.variableSymbol ?? "—"} | KS: ${inv.constantSymbol ?? "—"} | SS: ${inv.specificSymbol ?? "—"}`,
     `- Total: ${inv.totalPriceHcWithVat ?? "?"} ${cur?.code ?? "CZK"} (without VAT: ${inv.totalPriceHcWithoutVat ?? "?"})`,
+    `- Paid: ${inv.isSettled ? `Yes (${inv.dateOfPayment ?? "—"})` : `No — remaining: ${inv.remainingToPay ?? "?"}`}`,
   ];
+
+  if (vat) {
+    const vatParts = [];
+    if (vat.baseStandardRate) vatParts.push(`standard base: ${vat.baseStandardRate}, VAT: ${vat.vatStandardRate}`);
+    if (vat.baseReducedRate) vatParts.push(`reduced base: ${vat.baseReducedRate}, VAT: ${vat.vatReducedRate}`);
+    if (vat.baseZeroRate) vatParts.push(`zero-rate: ${vat.baseZeroRate}`);
+    if (vatParts.length > 0) lines.push(`- VAT: ${vatParts.join(" | ")}`);
+  }
+
+  const controlling = [cc?.code, proj?.code, act?.code].filter(Boolean);
+  if (controlling.length > 0) {
+    lines.push(`- Controlling: ${cc?.code ? `CC:${cc.code}` : ""} ${proj?.code ? `Proj:${proj.code}` : ""} ${act?.code ? `Act:${act.code}` : ""}`.trim());
+  }
+
+  if (inv.account) lines.push(`- Account: ${inv.account} | Entry: ${inv.predefinedEntry ?? "—"}`);
 
   if (items && items.length > 0) {
     lines.push("- Items:");
     for (const it of items) {
-      lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)`);
+      const disc = it.discount ? ` (-${it.discount}%)` : "";
+      lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)${disc}`);
     }
   }
 
-  if (inv.text) lines.push(`- Note: ${inv.text}`);
+  if (inv.text) lines.push(`- Text: ${inv.text}`);
+  if (inv.note) lines.push(`- Note: ${inv.note}`);
   return lines.join("\n");
 }
 
 export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_issued_invoices",
-    "Query issued (outgoing) invoices from Money S3 with optional filtering, ordering, and pagination",
+    "Query issued (outgoing) invoices with VAT breakdown, payment status, controlling variables, filtering and pagination",
     {
       take: z.number().min(1).max(100).default(20).describe("Number of records to return"),
       skip: z.number().min(0).default(0).describe("Number of records to skip"),
@@ -83,7 +117,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
 
   server.tool(
     "m3_received_invoices",
-    "Query received (incoming) invoices from Money S3 with optional filtering, ordering, and pagination",
+    "Query received (incoming) invoices with VAT breakdown, payment status, controlling variables, filtering and pagination",
     {
       take: z.number().min(1).max(100).default(20).describe("Number of records to return"),
       skip: z.number().min(0).default(0).describe("Number of records to skip"),
@@ -110,25 +144,46 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_issued_invoice",
     "Create a new issued (outgoing) invoice in Money S3. Written to async import queue.",
     {
-      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Issue date (DD.MM.YYYY)"),
-      dateOfTaxing: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Tax date (DD.MM.YYYY)"),
-      dateOfMaturity: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Maturity date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Issue date (DD.MM.YYYY)"),
+      dateOfTaxing: z.string().regex(DATE_RE, DATE_MSG).describe("Tax date (DD.MM.YYYY)"),
+      dateOfMaturity: z.string().regex(DATE_RE, DATE_MSG).describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional().describe("Document number (auto-generated if omitted)"),
       numericalSeriePrefix: z.string().default("").describe("Numerical series prefix"),
+      isCreditNote: z.boolean().default(false).describe("Mark as credit note (dobropis)"),
+      costCenterCode: z.string().optional().describe("Cost center code (středisko)"),
+      projectCode: z.string().optional().describe("Project code (zakázka)"),
+      activityCode: z.string().optional().describe("Activity code (činnost)"),
       items: z.array(z.object({
         description: z.string(),
         amount: z.number().min(0),
         unitPriceHc: z.number(),
         vatRate: z.string().optional().describe("VAT rate identifier"),
+        discount: z.number().min(0).max(100).optional().describe("Discount percentage"),
       })).min(1).describe("Invoice line items"),
       definitionShortcut: z.string().default("_FP+FV").describe("XML transfer definition shortcut"),
     },
-    async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, items, definitionShortcut }) => {
-      const itemsGql = items.map((it) =>
-        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: "${escGql(it.vatRate)}"` : ""}, warrantyType: CONSTANT, isInverse: false }`
-      ).join(", ");
+    async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, isCreditNote, costCenterCode, projectCode, activityCode, items, definitionShortcut }) => {
+      const itemsGql = items.map((it) => {
+        const parts = [
+          `description: "${escGql(it.description)}"`,
+          `amount: ${it.amount}`,
+          `unitPriceHc: ${it.unitPriceHc}`,
+          it.vatRate ? `vatRate: "${escGql(it.vatRate)}"` : "",
+          it.discount ? `discount: ${it.discount}` : "",
+          `warrantyType: CONSTANT`,
+          `isInverse: false`,
+        ].filter(Boolean);
+        return `{ ${parts.join(", ")} }`;
+      }).join(", ");
 
-      const docNum = documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "";
+      const extras = [
+        documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
+        isCreditNote ? `isCreditNote: true` : "",
+        costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
+        projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
+        activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
+      ].filter(Boolean).join("\n      ");
+
       const gql = `mutation {
   createIssuedInvoice(
     issuedInvoice: {
@@ -136,7 +191,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       dateOfTaxing: "${escGql(dateOfTaxing)}"
       dateOfMaturity: "${escGql(dateOfMaturity)}"
       numericalSerie: { prefix: "${escGql(numericalSeriePrefix)}" }
-      ${docNum}
+      ${extras}
       items: [${itemsGql}]
     }
     definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
@@ -154,25 +209,44 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_received_invoice",
     "Create a new received (incoming) invoice in Money S3. Written to async import queue.",
     {
-      dateOfIssue: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Issue date (DD.MM.YYYY)"),
-      dateOfTaxing: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Tax date (DD.MM.YYYY)"),
-      dateOfMaturity: z.string().regex(/^\d{2}\.\d{2}\.\d{4}$/, "Expected DD.MM.YYYY format").describe("Maturity date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Issue date (DD.MM.YYYY)"),
+      dateOfTaxing: z.string().regex(DATE_RE, DATE_MSG).describe("Tax date (DD.MM.YYYY)"),
+      dateOfMaturity: z.string().regex(DATE_RE, DATE_MSG).describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional().describe("Document number"),
       numericalSeriePrefix: z.string().default("").describe("Numerical series prefix"),
+      costCenterCode: z.string().optional().describe("Cost center code"),
+      projectCode: z.string().optional().describe("Project code"),
+      activityCode: z.string().optional().describe("Activity code"),
       items: z.array(z.object({
         description: z.string(),
         amount: z.number().min(0),
         unitPriceHc: z.number(),
         vatRate: z.string().optional(),
+        discount: z.number().min(0).max(100).optional(),
       })).min(1).describe("Invoice line items"),
       definitionShortcut: z.string().default("_FP+PF").describe("XML transfer definition shortcut"),
     },
-    async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, items, definitionShortcut }) => {
-      const itemsGql = items.map((it) =>
-        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: "${escGql(it.vatRate)}"` : ""}, warrantyType: CONSTANT, isInverse: false }`
-      ).join(", ");
+    async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, costCenterCode, projectCode, activityCode, items, definitionShortcut }) => {
+      const itemsGql = items.map((it) => {
+        const parts = [
+          `description: "${escGql(it.description)}"`,
+          `amount: ${it.amount}`,
+          `unitPriceHc: ${it.unitPriceHc}`,
+          it.vatRate ? `vatRate: "${escGql(it.vatRate)}"` : "",
+          it.discount ? `discount: ${it.discount}` : "",
+          `warrantyType: CONSTANT`,
+          `isInverse: false`,
+        ].filter(Boolean);
+        return `{ ${parts.join(", ")} }`;
+      }).join(", ");
 
-      const docNum = documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "";
+      const extras = [
+        documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
+        costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
+        projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
+        activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
+      ].filter(Boolean).join("\n      ");
+
       const gql = `mutation {
   createReceivedInvoice(
     receivedInvoice: {
@@ -180,7 +254,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       dateOfTaxing: "${escGql(dateOfTaxing)}"
       dateOfMaturity: "${escGql(dateOfMaturity)}"
       numericalSerie: { prefix: "${escGql(numericalSeriePrefix)}" }
-      ${docNum}
+      ${extras}
       items: [${itemsGql}]
     }
     definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
