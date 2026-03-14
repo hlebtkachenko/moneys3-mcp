@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { escGql } from "./helpers.js";
 
 export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -122,9 +123,9 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     },
     async (params) => {
       const fields = [
-        `catalogueNumber: "${params.catalogueNumber}"`,
-        `name: "${params.name}"`,
-        `unit: "${params.unit}"`,
+        `catalogueNumber: "${escGql(params.catalogueNumber)}"`,
+        `name: "${escGql(params.name)}"`,
+        `unit: "${escGql(params.unit)}"`,
         params.sellingPriceHc != null ? `sellingPriceHc: ${params.sellingPriceHc}` : "",
         params.purchasePriceHc != null ? `purchasePriceHc: ${params.purchasePriceHc}` : "",
       ].filter(Boolean).join(", ");
@@ -132,7 +133,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       const gql = `mutation {
   createStockCard(
     stockCard: { ${fields} }
-    definitionXMLTransfer: { shortCut: "${params.definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 

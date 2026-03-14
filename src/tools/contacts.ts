@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { escGql } from "./helpers.js";
 
 const ADDRESS_FIELDS = `
   items {
@@ -87,22 +88,22 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
     },
     async (params) => {
       const addr = [
-        params.name ? `name: "${params.name}"` : "",
-        params.street ? `street: "${params.street}"` : "",
-        params.city ? `city: "${params.city}"` : "",
-        params.zip ? `zip: "${params.zip}"` : "",
-        params.country ? `country: "${params.country}"` : "",
+        params.name ? `name: "${escGql(params.name!)}"` : "",
+        params.street ? `street: "${escGql(params.street!)}"` : "",
+        params.city ? `city: "${escGql(params.city!)}"` : "",
+        params.zip ? `zip: "${escGql(params.zip!)}"` : "",
+        params.country ? `country: "${escGql(params.country!)}"` : "",
       ].filter(Boolean).join(", ");
 
       const co = [
-        params.identificationNumber ? `identificationNumber: "${params.identificationNumber}"` : "",
-        params.vatNumber ? `vatNumber: "${params.vatNumber}"` : "",
+        params.identificationNumber ? `identificationNumber: "${escGql(params.identificationNumber!)}"` : "",
+        params.vatNumber ? `vatNumber: "${escGql(params.vatNumber!)}"` : "",
       ].filter(Boolean).join(", ");
 
       const ct = [
-        params.email ? `email: "${params.email}"` : "",
-        params.phone ? `phone: "${params.phone}"` : "",
-        params.web ? `web: "${params.web}"` : "",
+        params.email ? `email: "${escGql(params.email!)}"` : "",
+        params.phone ? `phone: "${escGql(params.phone!)}"` : "",
+        params.web ? `web: "${escGql(params.web!)}"` : "",
       ].filter(Boolean).join(", ");
 
       const gql = `mutation {
@@ -112,7 +113,7 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
       ${co ? `company: { ${co} }` : ""}
       ${ct ? `contact: { ${ct} }` : ""}
     }
-    definitionXMLTransfer: { shortCut: "${params.definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 

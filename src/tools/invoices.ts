@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { escGql } from "./helpers.js";
 
 const INVOICE_FIELDS = `
   items {
@@ -124,21 +125,21 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, items, definitionShortcut }) => {
       const itemsGql = items.map((it) =>
-        `{ description: "${it.description}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: ${it.vatRate}` : ""}, warrantyType: CONSTANT, isInverse: false }`
+        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: ${it.vatRate}` : ""}, warrantyType: CONSTANT, isInverse: false }`
       ).join(", ");
 
-      const docNum = documentNumber ? `documentNumber: "${documentNumber}"` : "";
+      const docNum = documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "";
       const gql = `mutation {
   createIssuedInvoice(
     issuedInvoice: {
-      dateOfIssue: "${dateOfIssue}"
-      dateOfTaxing: "${dateOfTaxing}"
-      dateOfMaturity: "${dateOfMaturity}"
-      numericalSerie: { prefix: "${numericalSeriePrefix}" }
+      dateOfIssue: "${escGql(dateOfIssue)}"
+      dateOfTaxing: "${escGql(dateOfTaxing)}"
+      dateOfMaturity: "${escGql(dateOfMaturity)}"
+      numericalSerie: { prefix: "${escGql(numericalSeriePrefix)}" }
       ${docNum}
       items: [${itemsGql}]
     }
-    definitionXMLTransfer: { shortCut: "${definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
@@ -168,21 +169,21 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, items, definitionShortcut }) => {
       const itemsGql = items.map((it) =>
-        `{ description: "${it.description}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: ${it.vatRate}` : ""}, warrantyType: CONSTANT, isInverse: false }`
+        `{ description: "${escGql(it.description)}", amount: ${it.amount}, unitPriceHc: ${it.unitPriceHc}${it.vatRate ? `, vatRate: ${it.vatRate}` : ""}, warrantyType: CONSTANT, isInverse: false }`
       ).join(", ");
 
-      const docNum = documentNumber ? `documentNumber: "${documentNumber}"` : "";
+      const docNum = documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "";
       const gql = `mutation {
   createReceivedInvoice(
     receivedInvoice: {
-      dateOfIssue: "${dateOfIssue}"
-      dateOfTaxing: "${dateOfTaxing}"
-      dateOfMaturity: "${dateOfMaturity}"
-      numericalSerie: { prefix: "${numericalSeriePrefix}" }
+      dateOfIssue: "${escGql(dateOfIssue)}"
+      dateOfTaxing: "${escGql(dateOfTaxing)}"
+      dateOfMaturity: "${escGql(dateOfMaturity)}"
+      numericalSerie: { prefix: "${escGql(numericalSeriePrefix)}" }
       ${docNum}
       items: [${itemsGql}]
     }
-    definitionXMLTransfer: { shortCut: "${definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 

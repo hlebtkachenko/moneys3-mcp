@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { escGql } from "./helpers.js";
 
 const DOC_FIELDS = `
   items {
@@ -87,21 +88,21 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async (params) => {
       const fields = [
-        `dateOfIssue: "${params.dateOfIssue}"`,
-        params.documentNumber ? `documentNumber: "${params.documentNumber}"` : "",
+        `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
         `totalPriceHcWithVat: ${params.totalAmount}`,
-        params.variableSymbol ? `variableSymbol: "${params.variableSymbol}"` : "",
-        params.text ? `text: "${params.text}"` : "",
+        params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
+        params.text ? `text: "${escGql(params.text)}"` : "",
       ].filter(Boolean).join(", ");
 
       const partner = params.partnerName
-        ? `partnerAddress: { businessAddress: { name: "${params.partnerName}" } }`
+        ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName!)}" } }`
         : "";
 
       const gql = `mutation {
   createBankDocument(
     bankDocument: { ${fields} ${partner} }
-    definitionXMLTransfer: { shortCut: "${params.definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
@@ -123,16 +124,16 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async (params) => {
       const fields = [
-        `dateOfIssue: "${params.dateOfIssue}"`,
-        params.documentNumber ? `documentNumber: "${params.documentNumber}"` : "",
+        `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
         `totalPriceHcWithVat: ${params.totalAmount}`,
-        params.text ? `text: "${params.text}"` : "",
+        params.text ? `text: "${escGql(params.text)}"` : "",
       ].filter(Boolean).join(", ");
 
       const gql = `mutation {
   createCashDeskDocument(
     cashDeskDocument: { ${fields} }
-    definitionXMLTransfer: { shortCut: "${params.definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 

@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { escGql } from "./helpers.js";
 
 export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -92,8 +93,8 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     async ({ code, name, definitionShortcut }) => {
       const gql = `mutation {
   createCostCenter(
-    costCenter: { code: "${code}", name: "${name}" }
-    definitionXMLTransfer: { shortCut: "${definitionShortcut}" }
+    costCenter: { code: "${escGql(code)}", name: "${escGql(name)}" }
+    definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
       const data = await m3.query<{ createCostCenter: { guid: string; isSuccess: boolean } }>(gql, true);
@@ -113,8 +114,8 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     async ({ code, name, definitionShortcut }) => {
       const gql = `mutation {
   createProject(
-    project: { code: "${code}", name: "${name}" }
-    definitionXMLTransfer: { shortCut: "${definitionShortcut}" }
+    project: { code: "${escGql(code)}", name: "${escGql(name)}" }
+    definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
       const data = await m3.query<{ createProject: { guid: string; isSuccess: boolean } }>(gql, true);
@@ -134,8 +135,8 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     async ({ code, name, definitionShortcut }) => {
       const gql = `mutation {
   createActivity(
-    activity: { code: "${code}", name: "${name}" }
-    definitionXMLTransfer: { shortCut: "${definitionShortcut}" }
+    activity: { code: "${escGql(code)}", name: "${escGql(name)}" }
+    definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
       const data = await m3.query<{ createActivity: { guid: string; isSuccess: boolean } }>(gql, true);

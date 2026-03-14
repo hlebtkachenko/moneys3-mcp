@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { escGql } from "./helpers.js";
 
 function paginationArgs(take: number, skip: number, where?: string): string {
   const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
@@ -124,16 +125,16 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async (params) => {
       const fields = [
-        `dateOfIssue: "${params.dateOfIssue}"`,
-        params.documentNumber ? `documentNumber: "${params.documentNumber}"` : "",
-        params.text ? `text: "${params.text}"` : "",
+        `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
+        params.text ? `text: "${escGql(params.text)}"` : "",
         params.totalAmount != null ? `totalPriceHcWithVat: ${params.totalAmount}` : "",
       ].filter(Boolean).join(", ");
 
       const gql = `mutation {
   createInternalDocument(
     internalDocument: { ${fields} }
-    definitionXMLTransfer: { shortCut: "${params.definitionShortcut}" }
+    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
