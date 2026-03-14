@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { MoneyS3Client } from "./moneys3-client.js";
@@ -11,6 +12,8 @@ import { registerAccountingTools } from "./tools/accounting.js";
 import { registerPayrollTools } from "./tools/payroll.js";
 import { registerControllingTools } from "./tools/controlling.js";
 import { registerGraphQLTools } from "./tools/graphql.js";
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
 function required(name: string): string {
   const val = process.env[name];
@@ -38,7 +41,7 @@ const client = new MoneyS3Client({
   maxRetries: optInt("MONEYS3_MAX_RETRIES", 3),
 });
 
-const server = new McpServer({ name: "moneys3", version: "1.0.0" });
+const server = new McpServer({ name: "moneys3", version: pkg.version });
 
 registerAgendaTools(server, client);
 registerInvoiceTools(server, client);

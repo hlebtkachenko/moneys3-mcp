@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql } from "./helpers.js";
+import { escGql, buildArgs, textResult, errorResult } from "./helpers.js";
 
 const ADDRESS_FIELDS = `
   items {
@@ -78,15 +78,16 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
-      if (where) parts.push(`where: ${where}`);
-      if (order) parts.push(`order: ${order}`);
-      const gql = `{ addressBook(${parts.join(", ")}) { ${ADDRESS_FIELDS} } }`;
-      const data = await m3.query<{ addressBook: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const ab = data.addressBook;
-      if (!ab?.items?.length) return { content: [{ type: "text", text: "No contacts found." }] };
-      const header = `# Address Book (${ab.items.length} of ${ab.totalCount})\n`;
-      return { content: [{ type: "text", text: header + ab.items.map(formatContact).join("\n\n") }] };
+      try {
+        const gql = `{ addressBook(${buildArgs(take, skip, where, order)}) { ${ADDRESS_FIELDS} } }`;
+        const data = await m3.query<{ addressBook: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const ab = data.addressBook;
+        if (!ab?.items?.length) return textResult("No contacts found.");
+        const header = `# Address Book (${ab.items.length} of ${ab.totalCount})\n`;
+        return textResult(header + ab.items.map(formatContact).join("\n\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -119,45 +120,46 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_AD").describe("XML transfer definition shortcut"),
     },
     async (params) => {
-      const addr = [
-        `name: "${escGql(params.name)}"`,
-        params.street ? `street: "${escGql(params.street)}"` : "",
-        params.city ? `city: "${escGql(params.city)}"` : "",
-        params.zip ? `zip: "${escGql(params.zip)}"` : "",
-        params.country ? `country: "${escGql(params.country)}"` : "",
-        params.countryCode ? `countryCode: "${escGql(params.countryCode)}"` : "",
-      ].filter(Boolean).join(", ");
+      try {
+        const addr = [
+          `name: "${escGql(params.name)}"`,
+          params.street ? `street: "${escGql(params.street)}"` : "",
+          params.city ? `city: "${escGql(params.city)}"` : "",
+          params.zip ? `zip: "${escGql(params.zip)}"` : "",
+          params.country ? `country: "${escGql(params.country)}"` : "",
+          params.countryCode ? `countryCode: "${escGql(params.countryCode)}"` : "",
+        ].filter(Boolean).join(", ");
 
-      const co = [
-        params.identificationNumber ? `identificationNumber: "${escGql(params.identificationNumber)}"` : "",
-        params.vatNumber ? `vatNumber: "${escGql(params.vatNumber)}"` : "",
-      ].filter(Boolean).join(", ");
+        const co = [
+          params.identificationNumber ? `identificationNumber: "${escGql(params.identificationNumber)}"` : "",
+          params.vatNumber ? `vatNumber: "${escGql(params.vatNumber)}"` : "",
+        ].filter(Boolean).join(", ");
 
-      const ct = [
-        params.email ? `email: "${escGql(params.email)}"` : "",
-        params.phone ? `phone: "${escGql(params.phone)}"` : "",
-        params.mobile ? `mobile: "${escGql(params.mobile)}"` : "",
-        params.web ? `web: "${escGql(params.web)}"` : "",
-      ].filter(Boolean).join(", ");
+        const ct = [
+          params.email ? `email: "${escGql(params.email)}"` : "",
+          params.phone ? `phone: "${escGql(params.phone)}"` : "",
+          params.mobile ? `mobile: "${escGql(params.mobile)}"` : "",
+          params.web ? `web: "${escGql(params.web)}"` : "",
+        ].filter(Boolean).join(", ");
 
-      const bankParts = [
-        params.bankAccountNumber ? `accountNumber: "${escGql(params.bankAccountNumber)}"` : "",
-        params.bankCode ? `bankCode: "${escGql(params.bankCode)}"` : "",
-        params.iban ? `iban: "${escGql(params.iban)}"` : "",
-      ].filter(Boolean);
+        const bankParts = [
+          params.bankAccountNumber ? `accountNumber: "${escGql(params.bankAccountNumber)}"` : "",
+          params.bankCode ? `bankCode: "${escGql(params.bankCode)}"` : "",
+          params.iban ? `iban: "${escGql(params.iban)}"` : "",
+        ].filter(Boolean);
 
-      const extras = [
-        params.isVatPayer != null ? `isVatPayer: ${params.isVatPayer}` : "",
-        params.isPhysicalPerson != null ? `isPhysicalPerson: ${params.isPhysicalPerson}` : "",
-        params.discount != null ? `discount: ${params.discount}` : "",
-        params.creditLimit != null ? `creditLimit: ${params.creditLimit}` : "",
-        params.maturityDaysReceivable != null ? `defaultMaturityDaysReceivable: ${params.maturityDaysReceivable}` : "",
-        params.maturityDaysPayable != null ? `defaultMaturityDaysPayable: ${params.maturityDaysPayable}` : "",
-        params.groupCode ? `group: { code: "${escGql(params.groupCode)}" }` : "",
-        bankParts.length > 0 ? `bankAccounts: [{ ${bankParts.join(", ")} }]` : "",
-      ].filter(Boolean).join("\n      ");
+        const extras = [
+          params.isVatPayer != null ? `isVatPayer: ${params.isVatPayer}` : "",
+          params.isPhysicalPerson != null ? `isPhysicalPerson: ${params.isPhysicalPerson}` : "",
+          params.discount != null ? `discount: ${params.discount}` : "",
+          params.creditLimit != null ? `creditLimit: ${params.creditLimit}` : "",
+          params.maturityDaysReceivable != null ? `defaultMaturityDaysReceivable: ${params.maturityDaysReceivable}` : "",
+          params.maturityDaysPayable != null ? `defaultMaturityDaysPayable: ${params.maturityDaysPayable}` : "",
+          params.groupCode ? `group: { code: "${escGql(params.groupCode)}" }` : "",
+          bankParts.length > 0 ? `bankAccounts: [{ ${bankParts.join(", ")} }]` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createAddress(
     address: {
       businessAddress: { ${addr} }
@@ -169,9 +171,12 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createAddress: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createAddress;
-      return { content: [{ type: "text", text: `Contact "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createAddress: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createAddress;
+        return textResult(`Contact "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -182,10 +187,14 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
       id: z.number().int().positive().describe("Address record ID"),
     },
     async ({ id }) => {
-      const gql = `mutation { deleteAddress(address: { id: ${id} }) { guid isSuccess } }`;
-      const data = await m3.query<{ deleteAddress: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.deleteAddress;
-      return { content: [{ type: "text", text: `Address #${id} ${result.isSuccess ? "deleted" : "deletion queued"}.\nGUID: \`${result.guid}\`` }] };
+      try {
+        const gql = `mutation { deleteAddress(address: { id: ${id} }) { guid isSuccess } }`;
+        const data = await m3.query<{ deleteAddress: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.deleteAddress;
+        return textResult(`Address #${id} ${result.isSuccess ? "deleted" : "deletion queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }

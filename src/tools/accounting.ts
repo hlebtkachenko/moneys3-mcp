@@ -1,13 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-
-function buildArgs(take: number, skip: number, where?: string, order?: string): string {
-  const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
-  if (where) parts.push(`where: ${where}`);
-  if (order) parts.push(`order: ${order}`);
-  return parts.join(", ");
-}
+import { buildArgs, textResult, errorResult } from "./helpers.js";
 
 export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -20,7 +14,8 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const gql = `{ accountingJournal(${buildArgs(take, skip, where, order)}) {
+      try {
+        const gql = `{ accountingJournal(${buildArgs(take, skip, where, order)}) {
         items {
           id dateOfIssue dateOfAccounting documentNumber
           accountDebit accountCredit
@@ -34,30 +29,33 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
         totalCount
       } }`;
 
-      const data = await m3.query<{ accountingJournal: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const aj = data.accountingJournal;
-      if (!aj?.items?.length) return { content: [{ type: "text", text: "No journal entries found." }] };
+        const data = await m3.query<{ accountingJournal: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const aj = data.accountingJournal;
+        if (!aj?.items?.length) return textResult("No journal entries found.");
 
-      const lines = [`# Accounting Journal (${aj.items.length} of ${aj.totalCount})`, ""];
-      for (const e of aj.items) {
-        const cur = e.currency as Record<string, unknown> | undefined;
-        const cc = e.costCenter as Record<string, unknown> | undefined;
-        const proj = e.project as Record<string, unknown> | undefined;
-        const act = e.activity as Record<string, unknown> | undefined;
+        const lines = [`# Accounting Journal (${aj.items.length} of ${aj.totalCount})`, ""];
+        for (const e of aj.items) {
+          const cur = e.currency as Record<string, unknown> | undefined;
+          const cc = e.costCenter as Record<string, unknown> | undefined;
+          const proj = e.project as Record<string, unknown> | undefined;
+          const act = e.activity as Record<string, unknown> | undefined;
 
-        lines.push(
-          `- **${e.documentNumber ?? "—"}** (${e.dateOfIssue ?? "—"}) ` +
-          `D:${e.accountDebit ?? "—"} / C:${e.accountCredit ?? "—"} ` +
-          `${e.amount ?? "?"} ${cur?.code ?? "CZK"}` +
-          (e.text ? ` — ${e.text}` : ""),
-        );
+          lines.push(
+            `- **${e.documentNumber ?? "—"}** (${e.dateOfIssue ?? "—"}) ` +
+            `D:${e.accountDebit ?? "—"} / C:${e.accountCredit ?? "—"} ` +
+            `${e.amount ?? "?"} ${cur?.code ?? "CZK"}` +
+            (e.text ? ` — ${e.text}` : ""),
+          );
 
-        const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
-        if (ctrl.length > 0 || e.predefinedEntry) {
-          lines.push(`  ${ctrl.join(" ")}${e.predefinedEntry ? ` | Entry: ${e.predefinedEntry}` : ""}`);
+          const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
+          if (ctrl.length > 0 || e.predefinedEntry) {
+            lines.push(`  ${ctrl.join(" ")}${e.predefinedEntry ? ` | Entry: ${e.predefinedEntry}` : ""}`);
+          }
         }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -70,20 +68,24 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, order }) => {
-      const gql = `{ chartOfAccounts(${buildArgs(take, skip, undefined, order)}) {
+      try {
+        const gql = `{ chartOfAccounts(${buildArgs(take, skip, undefined, order)}) {
         items { id accountNumber name type analyticalGroup }
         totalCount
       } }`;
 
-      const data = await m3.query<{ chartOfAccounts: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const coa = data.chartOfAccounts;
-      if (!coa?.items?.length) return { content: [{ type: "text", text: "No accounts found." }] };
+        const data = await m3.query<{ chartOfAccounts: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const coa = data.chartOfAccounts;
+        if (!coa?.items?.length) return textResult("No accounts found.");
 
-      const lines = [`# Chart of Accounts (${coa.items.length} of ${coa.totalCount})`, ""];
-      for (const a of coa.items) {
-        lines.push(`- **${a.accountNumber ?? "—"}** ${a.name ?? "—"} (type: ${a.type ?? "—"}${a.analyticalGroup ? `, group: ${a.analyticalGroup}` : ""})`);
+        const lines = [`# Chart of Accounts (${coa.items.length} of ${coa.totalCount})`, ""];
+        for (const a of coa.items) {
+          lines.push(`- **${a.accountNumber ?? "—"}** ${a.name ?? "—"} (type: ${a.type ?? "—"}${a.analyticalGroup ? `, group: ${a.analyticalGroup}` : ""})`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -96,20 +98,24 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, order }) => {
-      const gql = `{ predefinedEntries(${buildArgs(take, skip, undefined, order)}) {
+      try {
+        const gql = `{ predefinedEntries(${buildArgs(take, skip, undefined, order)}) {
         items { id shortCut name accountDebit accountCredit description }
         totalCount
       } }`;
 
-      const data = await m3.query<{ predefinedEntries: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const pe = data.predefinedEntries;
-      if (!pe?.items?.length) return { content: [{ type: "text", text: "No predefined entries found." }] };
+        const data = await m3.query<{ predefinedEntries: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const pe = data.predefinedEntries;
+        if (!pe?.items?.length) return textResult("No predefined entries found.");
 
-      const lines = [`# Predefined Entries (${pe.items.length} of ${pe.totalCount})`, ""];
-      for (const e of pe.items) {
-        lines.push(`- **${e.shortCut ?? "—"}** ${e.name ?? "—"} (D:${e.accountDebit ?? "—"} / C:${e.accountCredit ?? "—"})${e.description ? ` — ${e.description}` : ""}`);
+        const lines = [`# Predefined Entries (${pe.items.length} of ${pe.totalCount})`, ""];
+        for (const e of pe.items) {
+          lines.push(`- **${e.shortCut ?? "—"}** ${e.name ?? "—"} (D:${e.accountDebit ?? "—"} / C:${e.accountCredit ?? "—"})${e.description ? ` — ${e.description}` : ""}`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 }

@@ -1,10 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql } from "./helpers.js";
-
-const DATE_RE = /^\d{2}\.\d{2}\.\d{4}$/;
-const DATE_MSG = "Expected DD.MM.YYYY format";
+import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from "./helpers.js";
 
 const DOC_FIELDS = `
   items {
@@ -74,13 +71,6 @@ function formatBankDoc(d: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-function buildArgs(take: number, skip: number, where?: string, order?: string): string {
-  const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
-  if (where) parts.push(`where: ${where}`);
-  if (order) parts.push(`order: ${order}`);
-  return parts.join(", ");
-}
-
 export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_bank_documents",
@@ -92,12 +82,16 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const gql = `{ bankDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-      const data = await m3.query<{ bankDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const bd = data.bankDocuments;
-      if (!bd?.items?.length) return { content: [{ type: "text", text: "No bank documents found." }] };
-      const header = `# Bank Documents (${bd.items.length} of ${bd.totalCount})\n`;
-      return { content: [{ type: "text", text: header + bd.items.map(formatBankDoc).join("\n\n") }] };
+      try {
+        const gql = `{ bankDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{ bankDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const bd = data.bankDocuments;
+        if (!bd?.items?.length) return textResult("No bank documents found.");
+        const header = `# Bank Documents (${bd.items.length} of ${bd.totalCount})\n`;
+        return textResult(header + bd.items.map(formatBankDoc).join("\n\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -111,12 +105,16 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const gql = `{ cashDeskDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-      const data = await m3.query<{ cashDeskDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const cd = data.cashDeskDocuments;
-      if (!cd?.items?.length) return { content: [{ type: "text", text: "No cash desk documents found." }] };
-      const header = `# Cash Desk Documents (${cd.items.length} of ${cd.totalCount})\n`;
-      return { content: [{ type: "text", text: header + cd.items.map(formatBankDoc).join("\n\n") }] };
+      try {
+        const gql = `{ cashDeskDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{ cashDeskDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const cd = data.cashDeskDocuments;
+        if (!cd?.items?.length) return textResult("No cash desk documents found.");
+        const header = `# Cash Desk Documents (${cd.items.length} of ${cd.totalCount})\n`;
+        return textResult(header + cd.items.map(formatBankDoc).join("\n\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -139,33 +137,37 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_BD").describe("XML transfer definition shortcut"),
     },
     async (params) => {
-      const fields = [
-        `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-        `totalPriceHcWithVat: ${params.totalAmount}`,
-        params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-        params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
-        params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
-        params.text ? `text: "${escGql(params.text)}"` : "",
-      ].filter(Boolean).join(", ");
+      try {
+        const fields = [
+          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
+          `totalPriceHcWithVat: ${params.totalAmount}`,
+          params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
+          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
+          params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
+          params.text ? `text: "${escGql(params.text)}"` : "",
+        ].filter(Boolean).join(", ");
 
-      const extras = [
-        params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` company: { identificationNumber: "${escGql(params.partnerIco)}" }` : ""} }` : "",
-        params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-        params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-        params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
-      ].filter(Boolean).join("\n      ");
+        const extras = [
+          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` company: { identificationNumber: "${escGql(params.partnerIco)}" }` : ""} }` : "",
+          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createBankDocument(
     bankDocument: { ${fields} ${extras} }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createBankDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createBankDocument;
-      return { content: [{ type: "text", text: `Bank document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createBankDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createBankDocument;
+        return textResult(`Bank document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -183,29 +185,33 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_PPD").describe("XML transfer definition shortcut"),
     },
     async (params) => {
-      const fields = [
-        `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-        `totalPriceHcWithVat: ${params.totalAmount}`,
-        params.text ? `text: "${escGql(params.text)}"` : "",
-      ].filter(Boolean).join(", ");
+      try {
+        const fields = [
+          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
+          `totalPriceHcWithVat: ${params.totalAmount}`,
+          params.text ? `text: "${escGql(params.text)}"` : "",
+        ].filter(Boolean).join(", ");
 
-      const extras = [
-        params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-        params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-        params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
-      ].filter(Boolean).join("\n      ");
+        const extras = [
+          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createCashDeskDocument(
     cashDeskDocument: { ${fields} ${extras} }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createCashDeskDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createCashDeskDocument;
-      return { content: [{ type: "text", text: `Cash desk document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createCashDeskDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createCashDeskDocument;
+        return textResult(`Cash desk document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -214,28 +220,32 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     "List bank accounts and cash desks configured in Money S3 (read-only)",
     {},
     async () => {
-      const gql = `{ bankAccountsAndCashDesks {
+      try {
+        const gql = `{ bankAccountsAndCashDesks {
         bankAccounts { items { id name bankCode accountNumber iban swift currency { code } } }
         cashDesks { items { id name currency { code } } }
       } }`;
 
-      const data = await m3.query<{ bankAccountsAndCashDesks: {
-        bankAccounts: { items: Record<string, unknown>[] };
-        cashDesks: { items: Record<string, unknown>[] };
-      } }>(gql);
+        const data = await m3.query<{ bankAccountsAndCashDesks: {
+          bankAccounts: { items: Record<string, unknown>[] };
+          cashDesks: { items: Record<string, unknown>[] };
+        } }>(gql);
 
-      const ba = data.bankAccountsAndCashDesks;
-      const lines = ["# Bank Accounts & Cash Desks", "", "## Bank Accounts"];
-      for (const a of ba?.bankAccounts?.items ?? []) {
-        const cur = a.currency as Record<string, unknown> | undefined;
-        lines.push(`- **${a.name ?? "—"}**: ${a.accountNumber ?? ""}/${a.bankCode ?? ""} (IBAN: ${a.iban ?? "—"}, SWIFT: ${a.swift ?? "—"}, ${cur?.code ?? "CZK"})`);
+        const ba = data.bankAccountsAndCashDesks;
+        const lines = ["# Bank Accounts & Cash Desks", "", "## Bank Accounts"];
+        for (const a of ba?.bankAccounts?.items ?? []) {
+          const cur = a.currency as Record<string, unknown> | undefined;
+          lines.push(`- **${a.name ?? "—"}**: ${a.accountNumber ?? ""}/${a.bankCode ?? ""} (IBAN: ${a.iban ?? "—"}, SWIFT: ${a.swift ?? "—"}, ${cur?.code ?? "CZK"})`);
+        }
+        lines.push("", "## Cash Desks");
+        for (const c of ba?.cashDesks?.items ?? []) {
+          const cur = c.currency as Record<string, unknown> | undefined;
+          lines.push(`- **${c.name ?? "—"}** (${cur?.code ?? "CZK"})`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      lines.push("", "## Cash Desks");
-      for (const c of ba?.cashDesks?.items ?? []) {
-        const cur = c.currency as Record<string, unknown> | undefined;
-        lines.push(`- **${c.name ?? "—"}** (${cur?.code ?? "CZK"})`);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 }

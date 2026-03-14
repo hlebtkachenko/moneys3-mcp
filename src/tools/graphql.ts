@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
+import { textResult, errorResult } from "./helpers.js";
 
 export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -12,22 +13,23 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ query, isMutation }) => {
       if (query.length > 10_000) {
-        return { content: [{ type: "text", text: "Query too long (max 10,000 characters)." }], isError: true };
+        return errorResult("Query too long (max 10,000 characters).");
       }
 
-      const data = await m3.query<unknown>(query, isMutation);
-      const formatted = JSON.stringify(data, null, 2);
+      try {
+        const data = await m3.query<unknown>(query, isMutation);
+        const formatted = JSON.stringify(data, null, 2);
 
-      if (formatted.length > 50_000) {
-        return {
-          content: [{
-            type: "text",
-            text: formatted.slice(0, 50_000) + "\n\n... (truncated, use pagination with take/skip to limit results)",
-          }],
-        };
+        if (formatted.length > 50_000) {
+          return textResult(
+            formatted.slice(0, 50_000) + "\n\n... (truncated, use pagination with take/skip to limit results)",
+          );
+        }
+
+        return textResult(formatted);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-
-      return { content: [{ type: "text", text: formatted }] };
     },
   );
 
@@ -56,7 +58,7 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
         lines.push(`- Connection FAILED: ${(err as Error).message}`);
       }
 
-      return { content: [{ type: "text", text: lines.join("\n") }] };
+      return textResult(lines.join("\n"));
     },
   );
 
@@ -69,10 +71,11 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
     },
     async ({ take, skip, where }) => {
-      const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
-      if (where) parts.push(`where: ${where}`);
+      try {
+        const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
+        if (where) parts.push(`where: ${where}`);
 
-      const gql = `{ orderDocuments(${parts.join(", ")}) {
+        const gql = `{ orderDocuments(${parts.join(", ")}) {
         items {
           id documentNumber dateOfIssue
           partnerAddress { businessAddress { name } company { identificationNumber } }
@@ -82,18 +85,21 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
         totalCount
       } }`;
 
-      const data = await m3.query<{ orderDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const od = data.orderDocuments;
+        const data = await m3.query<{ orderDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const od = data.orderDocuments;
 
-      if (!od?.items?.length) return { content: [{ type: "text", text: "No order documents found." }] };
+        if (!od?.items?.length) return textResult("No order documents found.");
 
-      const lines = [`# Order Documents (${od.items.length} of ${od.totalCount})`, ""];
-      for (const d of od.items) {
-        const partner = d.partnerAddress as Record<string, unknown> | undefined;
-        const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-        lines.push(`- **${d.documentNumber ?? "—"}** (${d.dateOfIssue ?? "—"}) — ${biz?.name ?? "—"} — ${d.totalPriceHcWithVat ?? "?"}`);
+        const lines = [`# Order Documents (${od.items.length} of ${od.totalCount})`, ""];
+        for (const d of od.items) {
+          const partner = d.partnerAddress as Record<string, unknown> | undefined;
+          const biz = partner?.businessAddress as Record<string, unknown> | undefined;
+          lines.push(`- **${d.documentNumber ?? "—"}** (${d.dateOfIssue ?? "—"}) — ${biz?.name ?? "—"} — ${d.totalPriceHcWithVat ?? "?"}`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 }

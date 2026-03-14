@@ -1,10 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql } from "./helpers.js";
-
-const DATE_RE = /^\d{2}\.\d{2}\.\d{4}$/;
-const DATE_MSG = "Expected DD.MM.YYYY format";
+import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from "./helpers.js";
 
 const INVOICE_FIELDS = `
   items {
@@ -30,15 +27,6 @@ const INVOICE_FIELDS = `
   }
   totalCount
 `;
-
-function buildFilter(where?: string, order?: string, take?: number, skip?: number): string {
-  const parts: string[] = [];
-  if (take != null) parts.push(`take: ${take}`);
-  if (skip != null) parts.push(`skip: ${skip}`);
-  if (where) parts.push(`where: ${where}`);
-  if (order) parts.push(`order: ${order}`);
-  return parts.length > 0 ? `(${parts.join(", ")})` : "";
-}
 
 function formatInvoice(inv: Record<string, unknown>): string {
   const partner = inv.partnerAddress as Record<string, unknown> | undefined;
@@ -100,18 +88,22 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause, e.g. { dateOfIssue: DESC }"),
     },
     async ({ take, skip, where, order }) => {
-      const params = buildFilter(where, order, take, skip);
-      const gql = `{ issuedInvoices${params} { ${INVOICE_FIELDS} } }`;
-      const data = await m3.query<{ issuedInvoices: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const inv = data.issuedInvoices;
+      try {
+        const params = buildArgs(take, skip, where, order);
+        const gql = `{ issuedInvoices(${params}) { ${INVOICE_FIELDS} } }`;
+        const data = await m3.query<{ issuedInvoices: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const inv = data.issuedInvoices;
 
-      if (!inv?.items?.length) {
-        return { content: [{ type: "text", text: "No issued invoices found." }] };
+        if (!inv?.items?.length) {
+          return textResult("No issued invoices found.");
+        }
+
+        const header = `# Issued Invoices (${inv.items.length} of ${inv.totalCount})\n`;
+        const body = inv.items.map(formatInvoice).join("\n\n");
+        return textResult(header + body);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-
-      const header = `# Issued Invoices (${inv.items.length} of ${inv.totalCount})\n`;
-      const body = inv.items.map(formatInvoice).join("\n\n");
-      return { content: [{ type: "text", text: header + body }] };
     },
   );
 
@@ -125,18 +117,22 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const params = buildFilter(where, order, take, skip);
-      const gql = `{ receivedInvoices${params} { ${INVOICE_FIELDS} } }`;
-      const data = await m3.query<{ receivedInvoices: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const inv = data.receivedInvoices;
+      try {
+        const params = buildArgs(take, skip, where, order);
+        const gql = `{ receivedInvoices(${params}) { ${INVOICE_FIELDS} } }`;
+        const data = await m3.query<{ receivedInvoices: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const inv = data.receivedInvoices;
 
-      if (!inv?.items?.length) {
-        return { content: [{ type: "text", text: "No received invoices found." }] };
+        if (!inv?.items?.length) {
+          return textResult("No received invoices found.");
+        }
+
+        const header = `# Received Invoices (${inv.items.length} of ${inv.totalCount})\n`;
+        const body = inv.items.map(formatInvoice).join("\n\n");
+        return textResult(header + body);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-
-      const header = `# Received Invoices (${inv.items.length} of ${inv.totalCount})\n`;
-      const body = inv.items.map(formatInvoice).join("\n\n");
-      return { content: [{ type: "text", text: header + body }] };
     },
   );
 
@@ -163,28 +159,29 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_FP+FV").describe("XML transfer definition shortcut"),
     },
     async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, isCreditNote, costCenterCode, projectCode, activityCode, items, definitionShortcut }) => {
-      const itemsGql = items.map((it) => {
-        const parts = [
-          `description: "${escGql(it.description)}"`,
-          `amount: ${it.amount}`,
-          `unitPriceHc: ${it.unitPriceHc}`,
-          it.vatRate ? `vatRate: "${escGql(it.vatRate)}"` : "",
-          it.discount ? `discount: ${it.discount}` : "",
-          `warrantyType: CONSTANT`,
-          `isInverse: false`,
-        ].filter(Boolean);
-        return `{ ${parts.join(", ")} }`;
-      }).join(", ");
+      try {
+        const itemsGql = items.map((it) => {
+          const parts = [
+            `description: "${escGql(it.description)}"`,
+            `amount: ${it.amount}`,
+            `unitPriceHc: ${it.unitPriceHc}`,
+            it.vatRate ? `vatRate: "${escGql(it.vatRate)}"` : "",
+            it.discount ? `discount: ${it.discount}` : "",
+            `warrantyType: CONSTANT`,
+            `isInverse: false`,
+          ].filter(Boolean);
+          return `{ ${parts.join(", ")} }`;
+        }).join(", ");
 
-      const extras = [
-        documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
-        isCreditNote ? `isCreditNote: true` : "",
-        costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
-        projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
-        activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
-      ].filter(Boolean).join("\n      ");
+        const extras = [
+          documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
+          isCreditNote ? `isCreditNote: true` : "",
+          costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
+          projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
+          activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createIssuedInvoice(
     issuedInvoice: {
       dateOfIssue: "${escGql(dateOfIssue)}"
@@ -198,10 +195,13 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createIssuedInvoice: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createIssuedInvoice;
-      const status = result.isSuccess ? "queued successfully" : "queued (check import queue for status)";
-      return { content: [{ type: "text", text: `Issued invoice ${status}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createIssuedInvoice: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createIssuedInvoice;
+        const status = result.isSuccess ? "queued successfully" : "queued (check import queue for status)";
+        return textResult(`Issued invoice ${status}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -227,27 +227,28 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_FP+PF").describe("XML transfer definition shortcut"),
     },
     async ({ dateOfIssue, dateOfTaxing, dateOfMaturity, documentNumber, numericalSeriePrefix, costCenterCode, projectCode, activityCode, items, definitionShortcut }) => {
-      const itemsGql = items.map((it) => {
-        const parts = [
-          `description: "${escGql(it.description)}"`,
-          `amount: ${it.amount}`,
-          `unitPriceHc: ${it.unitPriceHc}`,
-          it.vatRate ? `vatRate: "${escGql(it.vatRate)}"` : "",
-          it.discount ? `discount: ${it.discount}` : "",
-          `warrantyType: CONSTANT`,
-          `isInverse: false`,
-        ].filter(Boolean);
-        return `{ ${parts.join(", ")} }`;
-      }).join(", ");
+      try {
+        const itemsGql = items.map((it) => {
+          const parts = [
+            `description: "${escGql(it.description)}"`,
+            `amount: ${it.amount}`,
+            `unitPriceHc: ${it.unitPriceHc}`,
+            it.vatRate ? `vatRate: "${escGql(it.vatRate)}"` : "",
+            it.discount ? `discount: ${it.discount}` : "",
+            `warrantyType: CONSTANT`,
+            `isInverse: false`,
+          ].filter(Boolean);
+          return `{ ${parts.join(", ")} }`;
+        }).join(", ");
 
-      const extras = [
-        documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
-        costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
-        projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
-        activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
-      ].filter(Boolean).join("\n      ");
+        const extras = [
+          documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
+          costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
+          projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
+          activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createReceivedInvoice(
     receivedInvoice: {
       dateOfIssue: "${escGql(dateOfIssue)}"
@@ -261,10 +262,13 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createReceivedInvoice: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createReceivedInvoice;
-      const status = result.isSuccess ? "queued successfully" : "queued (check import queue for status)";
-      return { content: [{ type: "text", text: `Received invoice ${status}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createReceivedInvoice: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createReceivedInvoice;
+        const status = result.isSuccess ? "queued successfully" : "queued (check import queue for status)";
+        return textResult(`Received invoice ${status}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -277,13 +281,17 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       year: z.number().int().min(2000).max(2100).describe("Accounting year"),
     },
     async ({ type, id, year }) => {
-      const mutationName = type === "issued" ? "deleteIssuedInvoice" : "deleteReceivedInvoice";
-      const inputName = type === "issued" ? "issuedInvoice" : "receivedInvoice";
-      const gql = `mutation { ${mutationName}(${inputName}: { id: ${id}, year: ${year} }) { guid isSuccess } }`;
-      const data = await m3.query<Record<string, { guid: string; isSuccess: boolean }>>(gql, true);
-      const result = data[mutationName];
-      const status = result.isSuccess ? "deleted" : "deletion queued (check import queue)";
-      return { content: [{ type: "text", text: `Invoice ${type} #${id} (${year}): ${status}.\nGUID: \`${result.guid}\`` }] };
+      try {
+        const mutationName = type === "issued" ? "deleteIssuedInvoice" : "deleteReceivedInvoice";
+        const inputName = type === "issued" ? "issuedInvoice" : "receivedInvoice";
+        const gql = `mutation { ${mutationName}(${inputName}: { id: ${id}, year: ${year} }) { guid isSuccess } }`;
+        const data = await m3.query<Record<string, { guid: string; isSuccess: boolean }>>(gql, true);
+        const result = data[mutationName];
+        const status = result.isSuccess ? "deleted" : "deletion queued (check import queue)";
+        return textResult(`Invoice ${type} #${id} (${year}): ${status}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }

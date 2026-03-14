@@ -1,17 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql } from "./helpers.js";
-
-const DATE_RE = /^\d{2}\.\d{2}\.\d{4}$/;
-const DATE_MSG = "Expected DD.MM.YYYY format";
-
-function buildArgs(take: number, skip: number, where?: string, order?: string): string {
-  const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
-  if (where) parts.push(`where: ${where}`);
-  if (order) parts.push(`order: ${order}`);
-  return parts.join(", ");
-}
+import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from "./helpers.js";
 
 export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -24,7 +14,8 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const gql = `{ stockCards(${buildArgs(take, skip, where, order)}) {
+      try {
+        const gql = `{ stockCards(${buildArgs(take, skip, where, order)}) {
         items {
           id catalogueNumber name description
           unit sellingPriceHc purchasePriceHc lastPurchasePriceHc
@@ -42,33 +33,36 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
         totalCount
       } }`;
 
-      const data = await m3.query<{ stockCards: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const sc = data.stockCards;
-      if (!sc?.items?.length) return { content: [{ type: "text", text: "No stock cards found." }] };
+        const data = await m3.query<{ stockCards: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const sc = data.stockCards;
+        if (!sc?.items?.length) return textResult("No stock cards found.");
 
-      const lines = [`# Stock Cards (${sc.items.length} of ${sc.totalCount})`, ""];
-      for (const c of sc.items) {
-        const sup = c.supplier as Record<string, unknown> | undefined;
-        const cat = c.category as Record<string, unknown> | undefined;
-        const grp = c.group as Record<string, unknown> | undefined;
-        const wh = c.warehouse as Record<string, unknown> | undefined;
+        const lines = [`# Stock Cards (${sc.items.length} of ${sc.totalCount})`, ""];
+        for (const c of sc.items) {
+          const sup = c.supplier as Record<string, unknown> | undefined;
+          const cat = c.category as Record<string, unknown> | undefined;
+          const grp = c.group as Record<string, unknown> | undefined;
+          const wh = c.warehouse as Record<string, unknown> | undefined;
 
-        lines.push(`## ${c.name ?? "—"} (#${c.id ?? "?"}) [${c.catalogueNumber ?? "—"}]`);
-        lines.push(`- Unit: ${c.unit ?? "—"} | Stock: ${c.stockAmount ?? 0} (min: ${c.minimumStock ?? "—"}, max: ${c.maximumStock ?? "—"})`);
-        lines.push(`- Sell: ${c.sellingPriceHc ?? "—"} | Buy: ${c.purchasePriceHc ?? "—"} | Last buy: ${c.lastPurchasePriceHc ?? "—"}`);
-        lines.push(`- VAT sale: ${c.vatRateSale ?? "—"} | VAT purchase: ${c.vatRatePurchase ?? "—"}`);
-        if (c.ean || c.barcode) lines.push(`- EAN: ${c.ean ?? "—"} | Barcode: ${c.barcode ?? "—"}`);
-        if (c.weight || c.volume) lines.push(`- Weight: ${c.weight ?? "—"} | Volume: ${c.volume ?? "—"}`);
-        if (c.warrantyMonths) lines.push(`- Warranty: ${c.warrantyMonths} months`);
-        if (sup?.name) lines.push(`- Supplier: ${sup.name} (${sup.identificationNumber ?? "—"})`);
-        if (cat?.name) lines.push(`- Category: ${cat.name} (${cat.code ?? "—"})`);
-        if (grp?.name) lines.push(`- Group: ${grp.name} (${grp.code ?? "—"})`);
-        if (wh?.name) lines.push(`- Warehouse: ${wh.name} (${wh.code ?? "—"})`);
-        if (c.description) lines.push(`- ${c.description}`);
-        if (c.note) lines.push(`- Note: ${c.note}`);
-        lines.push("");
+          lines.push(`## ${c.name ?? "—"} (#${c.id ?? "?"}) [${c.catalogueNumber ?? "—"}]`);
+          lines.push(`- Unit: ${c.unit ?? "—"} | Stock: ${c.stockAmount ?? 0} (min: ${c.minimumStock ?? "—"}, max: ${c.maximumStock ?? "—"})`);
+          lines.push(`- Sell: ${c.sellingPriceHc ?? "—"} | Buy: ${c.purchasePriceHc ?? "—"} | Last buy: ${c.lastPurchasePriceHc ?? "—"}`);
+          lines.push(`- VAT sale: ${c.vatRateSale ?? "—"} | VAT purchase: ${c.vatRatePurchase ?? "—"}`);
+          if (c.ean || c.barcode) lines.push(`- EAN: ${c.ean ?? "—"} | Barcode: ${c.barcode ?? "—"}`);
+          if (c.weight || c.volume) lines.push(`- Weight: ${c.weight ?? "—"} | Volume: ${c.volume ?? "—"}`);
+          if (c.warrantyMonths) lines.push(`- Warranty: ${c.warrantyMonths} months`);
+          if (sup?.name) lines.push(`- Supplier: ${sup.name} (${sup.identificationNumber ?? "—"})`);
+          if (cat?.name) lines.push(`- Category: ${cat.name} (${cat.code ?? "—"})`);
+          if (grp?.name) lines.push(`- Group: ${grp.name} (${grp.code ?? "—"})`);
+          if (wh?.name) lines.push(`- Warehouse: ${wh.name} (${wh.code ?? "—"})`);
+          if (c.description) lines.push(`- ${c.description}`);
+          if (c.note) lines.push(`- Note: ${c.note}`);
+          lines.push("");
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -77,21 +71,25 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     "Query stock lists — warehouses and price levels (read-only)",
     {},
     async () => {
-      const gql = `{ stockLists {
+      try {
+        const gql = `{ stockLists {
         warehouses { items { id name code } }
         priceLevels { items { id name code } }
       } }`;
-      const data = await m3.query<{ stockLists: { warehouses: { items: Record<string, unknown>[] }; priceLevels: { items: Record<string, unknown>[] } } }>(gql);
-      const sl = data.stockLists;
-      const lines = ["# Stock Lists", "", "## Warehouses"];
-      for (const w of sl?.warehouses?.items ?? []) {
-        lines.push(`- ${w.name ?? "—"} (code: ${w.code ?? "—"}, id: ${w.id ?? "?"})`);
+        const data = await m3.query<{ stockLists: { warehouses: { items: Record<string, unknown>[] }; priceLevels: { items: Record<string, unknown>[] } } }>(gql);
+        const sl = data.stockLists;
+        const lines = ["# Stock Lists", "", "## Warehouses"];
+        for (const w of sl?.warehouses?.items ?? []) {
+          lines.push(`- ${w.name ?? "—"} (code: ${w.code ?? "—"}, id: ${w.id ?? "?"})`);
+        }
+        lines.push("", "## Price Levels");
+        for (const p of sl?.priceLevels?.items ?? []) {
+          lines.push(`- ${p.name ?? "—"} (code: ${p.code ?? "—"}, id: ${p.id ?? "?"})`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      lines.push("", "## Price Levels");
-      for (const p of sl?.priceLevels?.items ?? []) {
-        lines.push(`- ${p.name ?? "—"} (code: ${p.code ?? "—"}, id: ${p.id ?? "?"})`);
-      }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -105,7 +103,8 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       order: z.string().optional().describe("GraphQL order clause"),
     },
     async ({ take, skip, where, order }) => {
-      const gql = `{ stockDocuments(${buildArgs(take, skip, where, order)}) {
+      try {
+        const gql = `{ stockDocuments(${buildArgs(take, skip, where, order)}) {
         items {
           id documentNumber dateOfIssue
           totalPriceHcWithVat totalPriceHcWithoutVat
@@ -123,42 +122,45 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
         totalCount
       } }`;
 
-      const data = await m3.query<{ stockDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-      const sd = data.stockDocuments;
-      if (!sd?.items?.length) return { content: [{ type: "text", text: "No stock documents found." }] };
+        const data = await m3.query<{ stockDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const sd = data.stockDocuments;
+        if (!sd?.items?.length) return textResult("No stock documents found.");
 
-      const lines = [`# Stock Documents (${sd.items.length} of ${sd.totalCount})`, ""];
-      for (const d of sd.items) {
-        const partner = d.partnerAddress as Record<string, unknown> | undefined;
-        const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-        const co = partner?.company as Record<string, unknown> | undefined;
-        const cc = d.costCenter as Record<string, unknown> | undefined;
-        const proj = d.project as Record<string, unknown> | undefined;
-        const act = d.activity as Record<string, unknown> | undefined;
-        const wh = d.warehouse as Record<string, unknown> | undefined;
-        const items = d.items as Array<Record<string, unknown>> | undefined;
+        const lines = [`# Stock Documents (${sd.items.length} of ${sd.totalCount})`, ""];
+        for (const d of sd.items) {
+          const partner = d.partnerAddress as Record<string, unknown> | undefined;
+          const biz = partner?.businessAddress as Record<string, unknown> | undefined;
+          const co = partner?.company as Record<string, unknown> | undefined;
+          const cc = d.costCenter as Record<string, unknown> | undefined;
+          const proj = d.project as Record<string, unknown> | undefined;
+          const act = d.activity as Record<string, unknown> | undefined;
+          const wh = d.warehouse as Record<string, unknown> | undefined;
+          const items = d.items as Array<Record<string, unknown>> | undefined;
 
-        lines.push(`## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`);
-        lines.push(`- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"})`);
-        lines.push(`- Total: ${d.totalPriceHcWithVat ?? "?"} (without VAT: ${d.totalPriceHcWithoutVat ?? "?"})`);
-        if (wh?.name) lines.push(`- Warehouse: ${wh.name} (${wh.code ?? "—"})`);
+          lines.push(`## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`);
+          lines.push(`- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"})`);
+          lines.push(`- Total: ${d.totalPriceHcWithVat ?? "?"} (without VAT: ${d.totalPriceHcWithoutVat ?? "?"})`);
+          if (wh?.name) lines.push(`- Warehouse: ${wh.name} (${wh.code ?? "—"})`);
 
-        const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
-        if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
+          const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
+          if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
 
-        if (items && items.length > 0) {
-          lines.push("- Items:");
-          for (const it of items) {
-            const disc = it.discount ? ` (-${it.discount}%)` : "";
-            const sn = it.serialNumber ? ` SN:${it.serialNumber}` : "";
-            lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0}${disc}${sn}`);
+          if (items && items.length > 0) {
+            lines.push("- Items:");
+            for (const it of items) {
+              const disc = it.discount ? ` (-${it.discount}%)` : "";
+              const sn = it.serialNumber ? ` SN:${it.serialNumber}` : "";
+              lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0}${disc}${sn}`);
+            }
           }
+          if (d.text) lines.push(`- Text: ${d.text}`);
+          if (d.note) lines.push(`- Note: ${d.note}`);
+          lines.push("");
         }
-        if (d.text) lines.push(`- Text: ${d.text}`);
-        if (d.note) lines.push(`- Note: ${d.note}`);
-        lines.push("");
+        return textResult(lines.join("\n"));
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-      return { content: [{ type: "text", text: lines.join("\n") }] };
     },
   );
 
@@ -182,32 +184,36 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_zSK").describe("XML transfer definition shortcut"),
     },
     async (params) => {
-      const fields = [
-        `catalogueNumber: "${escGql(params.catalogueNumber)}"`,
-        `name: "${escGql(params.name)}"`,
-        `unit: "${escGql(params.unit)}"`,
-        params.sellingPriceHc != null ? `sellingPriceHc: ${params.sellingPriceHc}` : "",
-        params.purchasePriceHc != null ? `purchasePriceHc: ${params.purchasePriceHc}` : "",
-        params.ean ? `ean: "${escGql(params.ean)}"` : "",
-        params.weight != null ? `weight: ${params.weight}` : "",
-        params.minimumStock != null ? `minimumStock: ${params.minimumStock}` : "",
-        params.maximumStock != null ? `maximumStock: ${params.maximumStock}` : "",
-        params.warrantyMonths != null ? `warrantyMonths: ${params.warrantyMonths}` : "",
-        params.categoryCode ? `category: { code: "${escGql(params.categoryCode)}" }` : "",
-        params.groupCode ? `group: { code: "${escGql(params.groupCode)}" }` : "",
-        params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
-      ].filter(Boolean).join(", ");
+      try {
+        const fields = [
+          `catalogueNumber: "${escGql(params.catalogueNumber)}"`,
+          `name: "${escGql(params.name)}"`,
+          `unit: "${escGql(params.unit)}"`,
+          params.sellingPriceHc != null ? `sellingPriceHc: ${params.sellingPriceHc}` : "",
+          params.purchasePriceHc != null ? `purchasePriceHc: ${params.purchasePriceHc}` : "",
+          params.ean ? `ean: "${escGql(params.ean)}"` : "",
+          params.weight != null ? `weight: ${params.weight}` : "",
+          params.minimumStock != null ? `minimumStock: ${params.minimumStock}` : "",
+          params.maximumStock != null ? `maximumStock: ${params.maximumStock}` : "",
+          params.warrantyMonths != null ? `warrantyMonths: ${params.warrantyMonths}` : "",
+          params.categoryCode ? `category: { code: "${escGql(params.categoryCode)}" }` : "",
+          params.groupCode ? `group: { code: "${escGql(params.groupCode)}" }` : "",
+          params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
+        ].filter(Boolean).join(", ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createStockCard(
     stockCard: { ${fields} }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createStockCard: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createStockCard;
-      return { content: [{ type: "text", text: `Stock card "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createStockCard: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createStockCard;
+        return textResult(`Stock card "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -232,27 +238,28 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_SD").describe("XML transfer definition shortcut"),
     },
     async (params) => {
-      const itemsGql = params.items.map((it) => {
-        const parts = [
-          `description: "${escGql(it.description)}"`,
-          `amount: ${it.amount}`,
-          `unitPriceHc: ${it.unitPriceHc}`,
-          it.serialNumber ? `serialNumber: "${escGql(it.serialNumber)}"` : "",
-          it.discount ? `discount: ${it.discount}` : "",
-        ].filter(Boolean);
-        return `{ ${parts.join(", ")} }`;
-      }).join(", ");
+      try {
+        const itemsGql = params.items.map((it) => {
+          const parts = [
+            `description: "${escGql(it.description)}"`,
+            `amount: ${it.amount}`,
+            `unitPriceHc: ${it.unitPriceHc}`,
+            it.serialNumber ? `serialNumber: "${escGql(it.serialNumber)}"` : "",
+            it.discount ? `discount: ${it.discount}` : "",
+          ].filter(Boolean);
+          return `{ ${parts.join(", ")} }`;
+        }).join(", ");
 
-      const extras = [
-        params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" } }` : "",
-        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-        params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-        params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-        params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
-        params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
-      ].filter(Boolean).join("\n      ");
+        const extras = [
+          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" } }` : "",
+          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
+          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+          params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createStockDocument(
     stockDocument: {
       dateOfIssue: "${escGql(params.dateOfIssue)}"
@@ -263,9 +270,12 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createStockDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createStockDocument;
-      return { content: [{ type: "text", text: `Stock document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createStockDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createStockDocument;
+        return textResult(`Stock document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 
@@ -279,12 +289,13 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       definitionShortcut: z.string().default("_INV").describe("XML transfer definition shortcut"),
     },
     async (params) => {
-      const extras = [
-        params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-        params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
-      ].filter(Boolean).join("\n      ");
+      try {
+        const extras = [
+          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
+          params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
+        ].filter(Boolean).join("\n      ");
 
-      const gql = `mutation {
+        const gql = `mutation {
   createInventoryDocument(
     inventoryDocument: {
       dateOfIssue: "${escGql(params.dateOfIssue)}"
@@ -294,9 +305,12 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-      const data = await m3.query<{ createInventoryDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-      const result = data.createInventoryDocument;
-      return { content: [{ type: "text", text: `Inventory document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\`` }] };
+        const data = await m3.query<{ createInventoryDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createInventoryDocument;
+        return textResult(`Inventory document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
     },
   );
 }

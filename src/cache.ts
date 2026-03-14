@@ -6,9 +6,11 @@ interface CacheEntry<T> {
 export class ResponseCache {
   private store = new Map<string, CacheEntry<unknown>>();
   private ttlMs: number;
+  private maxEntries: number;
 
-  constructor(ttlSeconds: number) {
+  constructor(ttlSeconds: number, maxEntries = 1000) {
     this.ttlMs = ttlSeconds * 1000;
+    this.maxEntries = maxEntries;
   }
 
   get enabled(): boolean {
@@ -28,6 +30,10 @@ export class ResponseCache {
   set<T>(key: string, data: T): void {
     if (!this.enabled) return;
     this.store.set(key, { data, expiresAt: Date.now() + this.ttlMs });
+    if (this.store.size > this.maxEntries) {
+      const oldest = this.store.keys().next().value;
+      if (oldest !== undefined) this.store.delete(oldest);
+    }
   }
 
   invalidate(pattern?: string): void {

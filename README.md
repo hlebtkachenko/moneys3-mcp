@@ -1,5 +1,9 @@
 # moneys3-mcp
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Node.js Version](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
+
 MCP server for [Money S3](https://money.cz/) — the Czech/Slovak accounting system by Seyfor. Connects any MCP-compatible AI client to your Money S3 data via the official GraphQL API.
 
 **43 tools** across 10 categories covering invoices, contacts, stock, banking, payroll, accounting, and more.
