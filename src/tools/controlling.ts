@@ -13,19 +13,19 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip }) => {
       try {
-        const gql = `{ costCenters(take: ${take}, skip: ${skip}) {
-        items { id code name }
+        const gql = `{ centres(take: ${take}, skip: ${skip}) {
+        items { id shortCut name }
         totalCount
       } }`;
 
-        const data = await m3.query<{ costCenters: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const cc = data.costCenters;
+        const data = await m3.query<{ centres: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const cc = data.centres;
 
         if (!cc?.items?.length) return textResult("No cost centers found.");
 
         const lines = [`# Cost Centers (${cc.items.length} of ${cc.totalCount})`, ""];
         for (const c of cc.items) {
-          lines.push(`- **${c.code ?? "—"}** ${c.name ?? "—"} (id: ${c.id ?? "?"})`);
+          lines.push(`- **${c.shortCut ?? "—"}** ${c.name ?? "—"} (id: ${c.id ?? "?"})`);
         }
         return textResult(lines.join("\n"));
       } catch (err) {
@@ -43,19 +43,19 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip }) => {
       try {
-        const gql = `{ projects(take: ${take}, skip: ${skip}) {
-        items { id code name }
+        const gql = `{ jobOrders(take: ${take}, skip: ${skip}) {
+        items { id shortCut name }
         totalCount
       } }`;
 
-        const data = await m3.query<{ projects: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const p = data.projects;
+        const data = await m3.query<{ jobOrders: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const p = data.jobOrders;
 
         if (!p?.items?.length) return textResult("No projects found.");
 
         const lines = [`# Projects (${p.items.length} of ${p.totalCount})`, ""];
         for (const proj of p.items) {
-          lines.push(`- **${proj.code ?? "—"}** ${proj.name ?? "—"} (id: ${proj.id ?? "?"})`);
+          lines.push(`- **${proj.shortCut ?? "—"}** ${proj.name ?? "—"} (id: ${proj.id ?? "?"})`);
         }
         return textResult(lines.join("\n"));
       } catch (err) {
@@ -73,19 +73,19 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip }) => {
       try {
-        const gql = `{ activities(take: ${take}, skip: ${skip}) {
-        items { id code name }
+        const gql = `{ operations(take: ${take}, skip: ${skip}) {
+        items { id shortCut name }
         totalCount
       } }`;
 
-        const data = await m3.query<{ activities: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const a = data.activities;
+        const data = await m3.query<{ operations: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const a = data.operations;
 
         if (!a?.items?.length) return textResult("No activities found.");
 
         const lines = [`# Activities (${a.items.length} of ${a.totalCount})`, ""];
         for (const act of a.items) {
-          lines.push(`- **${act.code ?? "—"}** ${act.name ?? "—"} (id: ${act.id ?? "?"})`);
+          lines.push(`- **${act.shortCut ?? "—"}** ${act.name ?? "—"} (id: ${act.id ?? "?"})`);
         }
         return textResult(lines.join("\n"));
       } catch (err) {
@@ -105,13 +105,13 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     async ({ code, name, definitionShortcut }) => {
       try {
         const gql = `mutation {
-  createCostCenter(
-    costCenter: { code: "${escGql(code)}", name: "${escGql(name)}" }
+  createCentre(
+    centre: { shortCut: "${escGql(code)}", name: "${escGql(name)}" }
     definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
-        const data = await m3.query<{ createCostCenter: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createCostCenter;
+        const data = await m3.query<{ createCentre: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createCentre;
         return textResult(`Cost center "${code}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -130,13 +130,13 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     async ({ code, name, definitionShortcut }) => {
       try {
         const gql = `mutation {
-  createProject(
-    project: { code: "${escGql(code)}", name: "${escGql(name)}" }
+  createJobOrder(
+    jobOrder: { shortCut: "${escGql(code)}", name: "${escGql(name)}" }
     definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
-        const data = await m3.query<{ createProject: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createProject;
+        const data = await m3.query<{ createJobOrder: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createJobOrder;
         return textResult(`Project "${code}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -155,13 +155,13 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     async ({ code, name, definitionShortcut }) => {
       try {
         const gql = `mutation {
-  createActivity(
-    activity: { code: "${escGql(code)}", name: "${escGql(name)}" }
+  createOperation(
+    operation: { shortCut: "${escGql(code)}", name: "${escGql(name)}" }
     definitionXMLTransfer: { shortCut: "${escGql(definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
-        const data = await m3.query<{ createActivity: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createActivity;
+        const data = await m3.query<{ createOperation: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createOperation;
         return textResult(`Activity "${code}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);

@@ -5,24 +5,21 @@ import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from ".
 
 const DOC_FIELDS = `
   items {
-    id documentNumber dateOfIssue dateOfAccounting
-    totalPriceHcWithVat totalPriceHcWithoutVat remainingToPay
-    isSettled dateOfPayment
+    id documentNumber dateOfIssue
+    totalWithVatHc amountToPayHc remainingAmountToPayHc
+    isBilled dateOfPayment
     currency { code }
-    vatSummary {
-      baseZeroRate baseReducedRate baseStandardRate
-      vatReducedRate vatStandardRate
-    }
+    vatRateSummaryHc { vatRate totalWithoutVat totalVat }
     partnerAddress {
-      businessAddress { name street city zip country }
-      company { identificationNumber vatNumber }
+      businessAddress { name street municipality postalCode country }
+      identificationNumber vatIdentificationNumber
     }
-    variableSymbol constantSymbol specificSymbol
-    costCenter { code name }
-    project { code name }
-    activity { code name }
-    account predefinedEntry
-    text note
+    variableSymbol constantSymbol { code } specificSymbol
+    centre { shortCut name }
+    jobOrder { shortCut name }
+    operation { shortCut name }
+    accountAssignment { accountAssignmentAcc { shortCut } }
+    description
     items { description amount unitPriceHc vatRate }
   }
   totalCount
@@ -31,33 +28,33 @@ const DOC_FIELDS = `
 function formatBankDoc(d: Record<string, unknown>): string {
   const partner = d.partnerAddress as Record<string, unknown> | undefined;
   const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-  const co = partner?.company as Record<string, unknown> | undefined;
   const cur = d.currency as Record<string, unknown> | undefined;
-  const vat = d.vatSummary as Record<string, unknown> | undefined;
-  const cc = d.costCenter as Record<string, unknown> | undefined;
-  const proj = d.project as Record<string, unknown> | undefined;
-  const act = d.activity as Record<string, unknown> | undefined;
+  const vatSummary = d.vatRateSummaryHc as Array<Record<string, unknown>> | undefined;
+  const cc = d.centre as Record<string, unknown> | undefined;
+  const proj = d.jobOrder as Record<string, unknown> | undefined;
+  const act = d.operation as Record<string, unknown> | undefined;
+  const aa = d.accountAssignment as Record<string, unknown> | undefined;
+  const aaAcc = aa?.accountAssignmentAcc as Record<string, unknown> | undefined;
+  const ks = d.constantSymbol as Record<string, unknown> | undefined;
   const items = d.items as Array<Record<string, unknown>> | undefined;
 
   const lines = [
     `## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`,
-    `- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"})`,
-    `- Address: ${[biz?.street, biz?.city, biz?.zip, biz?.country].filter(Boolean).join(", ") || "—"}`,
-    `- VS: ${d.variableSymbol ?? "—"} | KS: ${d.constantSymbol ?? "—"} | SS: ${d.specificSymbol ?? "—"}`,
-    `- Total: ${d.totalPriceHcWithVat ?? "?"} ${cur?.code ?? "CZK"} (without VAT: ${d.totalPriceHcWithoutVat ?? "?"})`,
-    `- Paid: ${d.isSettled ? `Yes (${d.dateOfPayment ?? "—"})` : `No — remaining: ${d.remainingToPay ?? "?"}`}`,
+    `- Partner: ${biz?.name ?? "—"} (ICO: ${partner?.identificationNumber ?? "—"})`,
+    `- Address: ${[biz?.street, biz?.municipality, biz?.postalCode, biz?.country].filter(Boolean).join(", ") || "—"}`,
+    `- VS: ${d.variableSymbol ?? "—"} | KS: ${ks?.code ?? "—"} | SS: ${d.specificSymbol ?? "—"}`,
+    `- Total: ${d.totalWithVatHc ?? "?"} ${cur?.code ?? "CZK"}`,
+    `- Paid: ${d.isBilled ? `Yes (${d.dateOfPayment ?? "—"})` : `No — remaining: ${d.remainingAmountToPayHc ?? "?"}`}`,
   ];
 
-  if (vat) {
-    const vatParts = [];
-    if (vat.baseStandardRate) vatParts.push(`standard: ${vat.baseStandardRate} + ${vat.vatStandardRate}`);
-    if (vat.baseReducedRate) vatParts.push(`reduced: ${vat.baseReducedRate} + ${vat.vatReducedRate}`);
-    if (vatParts.length > 0) lines.push(`- VAT: ${vatParts.join(" | ")}`);
+  if (vatSummary && vatSummary.length > 0) {
+    const vatParts = vatSummary.map((v) => `${v.vatRate}%: base ${v.totalWithoutVat}, VAT ${v.totalVat}`);
+    lines.push(`- VAT: ${vatParts.join(" | ")}`);
   }
 
-  const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
+  const ctrl = [cc?.shortCut && `CC:${cc.shortCut}`, proj?.shortCut && `Proj:${proj.shortCut}`, act?.shortCut && `Act:${act.shortCut}`].filter(Boolean);
   if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
-  if (d.account) lines.push(`- Account: ${d.account} | Entry: ${d.predefinedEntry ?? "—"}`);
+  if (aaAcc?.shortCut) lines.push(`- Account assignment: ${aaAcc.shortCut}`);
 
   if (items && items.length > 0) {
     lines.push("- Items:");
@@ -66,8 +63,7 @@ function formatBankDoc(d: Record<string, unknown>): string {
     }
   }
 
-  if (d.text) lines.push(`- Text: ${d.text}`);
-  if (d.note) lines.push(`- Note: ${d.note}`);
+  if (d.description) lines.push(`- Description: ${d.description}`);
   return lines.join("\n");
 }
 
@@ -83,9 +79,9 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ bankDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{ bankDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const bd = data.bankDocuments;
+        const gql = `{ bankStatements(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{ bankStatements: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const bd = data.bankStatements;
         if (!bd?.items?.length) return textResult("No bank documents found.");
         const header = `# Bank Documents (${bd.items.length} of ${bd.totalCount})\n`;
         return textResult(header + bd.items.map(formatBankDoc).join("\n\n"));
@@ -106,9 +102,9 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ cashDeskDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{ cashDeskDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const cd = data.cashDeskDocuments;
+        const gql = `{ cashVouchers(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{ cashVouchers: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const cd = data.cashVouchers;
         if (!cd?.items?.length) return textResult("No cash desk documents found.");
         const header = `# Cash Desk Documents (${cd.items.length} of ${cd.totalCount})\n`;
         return textResult(header + cd.items.map(formatBankDoc).join("\n\n"));
@@ -141,29 +137,27 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          `totalPriceHcWithVat: ${params.totalAmount}`,
           params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
           params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
-          params.text ? `text: "${escGql(params.text)}"` : "",
+          params.text ? `description: "${escGql(params.text)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [
-          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` company: { identificationNumber: "${escGql(params.partnerIco)}" }` : ""} }` : "",
-          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }` : "",
+          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
-  createBankDocument(
-    bankDocument: { ${fields} ${extras} }
+  createBankStatement(
+    bankStatement: { ${fields} ${extras} }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createBankDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createBankDocument;
+        const data = await m3.query<{ createBankStatement: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createBankStatement;
         return textResult(`Bank document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -189,25 +183,24 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          `totalPriceHcWithVat: ${params.totalAmount}`,
-          params.text ? `text: "${escGql(params.text)}"` : "",
+          params.text ? `description: "${escGql(params.text)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [
-          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
-  createCashDeskDocument(
-    cashDeskDocument: { ${fields} ${extras} }
+  createCashVoucher(
+    cashVoucher: { ${fields} ${extras} }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createCashDeskDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createCashDeskDocument;
+        const data = await m3.query<{ createCashVoucher: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createCashVoucher;
         return textResult(`Cash desk document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -221,26 +214,23 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     {},
     async () => {
       try {
-        const gql = `{ bankAccountsAndCashDesks {
-        bankAccounts { items { id name bankCode accountNumber iban swift currency { code } } }
-        cashDesks { items { id name currency { code } } }
+        const gql = `{ bankAccountCashBoxes(take: 100) {
+        items { id shortCut name currency { code } }
+        totalCount
       } }`;
 
-        const data = await m3.query<{ bankAccountsAndCashDesks: {
-          bankAccounts: { items: Record<string, unknown>[] };
-          cashDesks: { items: Record<string, unknown>[] };
-        } }>(gql);
+        const data = await m3.query<{ bankAccountCashBoxes: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
 
-        const ba = data.bankAccountsAndCashDesks;
-        const lines = ["# Bank Accounts & Cash Desks", "", "## Bank Accounts"];
-        for (const a of ba?.bankAccounts?.items ?? []) {
-          const cur = a.currency as Record<string, unknown> | undefined;
-          lines.push(`- **${a.name ?? "—"}**: ${a.accountNumber ?? ""}/${a.bankCode ?? ""} (IBAN: ${a.iban ?? "—"}, SWIFT: ${a.swift ?? "—"}, ${cur?.code ?? "CZK"})`);
-        }
-        lines.push("", "## Cash Desks");
-        for (const c of ba?.cashDesks?.items ?? []) {
-          const cur = c.currency as Record<string, unknown> | undefined;
-          lines.push(`- **${c.name ?? "—"}** (${cur?.code ?? "CZK"})`);
+        const ba = data.bankAccountCashBoxes;
+        const lines = ["# Bank Accounts & Cash Desks"];
+        if (!ba?.items?.length) {
+          lines.push("", "No bank accounts or cash desks found.");
+        } else {
+          lines.push("");
+          for (const a of ba.items) {
+            const cur = a.currency as Record<string, unknown> | undefined;
+            lines.push(`- **${a.name ?? "—"}** [${a.shortCut ?? "—"}] (${cur?.code ?? "CZK"}) id: ${a.id ?? "?"}`);
+          }
         }
         return textResult(lines.join("\n"));
       } catch (err) {

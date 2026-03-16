@@ -15,46 +15,23 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ stockCards(${buildArgs(take, skip, where, order)}) {
+        const gql = `{ articles(${buildArgs(take, skip, where, order)}) {
         items {
-          id catalogueNumber name description
-          unit sellingPriceHc purchasePriceHc lastPurchasePriceHc
-          stockAmount minimumStock maximumStock reorderLevel
-          vatRateSale vatRatePurchase
-          ean barcode serialNumbers
-          weight volume
-          warrantyMonths
-          supplier { name identificationNumber }
-          category { name code }
-          group { name code }
-          warehouse { name code }
+          id shortCut name description
+          unit
           note
         }
         totalCount
       } }`;
 
-        const data = await m3.query<{ stockCards: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const sc = data.stockCards;
+        const data = await m3.query<{ articles: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const sc = data.articles;
         if (!sc?.items?.length) return textResult("No stock cards found.");
 
         const lines = [`# Stock Cards (${sc.items.length} of ${sc.totalCount})`, ""];
         for (const c of sc.items) {
-          const sup = c.supplier as Record<string, unknown> | undefined;
-          const cat = c.category as Record<string, unknown> | undefined;
-          const grp = c.group as Record<string, unknown> | undefined;
-          const wh = c.warehouse as Record<string, unknown> | undefined;
-
-          lines.push(`## ${c.name ?? "—"} (#${c.id ?? "?"}) [${c.catalogueNumber ?? "—"}]`);
-          lines.push(`- Unit: ${c.unit ?? "—"} | Stock: ${c.stockAmount ?? 0} (min: ${c.minimumStock ?? "—"}, max: ${c.maximumStock ?? "—"})`);
-          lines.push(`- Sell: ${c.sellingPriceHc ?? "—"} | Buy: ${c.purchasePriceHc ?? "—"} | Last buy: ${c.lastPurchasePriceHc ?? "—"}`);
-          lines.push(`- VAT sale: ${c.vatRateSale ?? "—"} | VAT purchase: ${c.vatRatePurchase ?? "—"}`);
-          if (c.ean || c.barcode) lines.push(`- EAN: ${c.ean ?? "—"} | Barcode: ${c.barcode ?? "—"}`);
-          if (c.weight || c.volume) lines.push(`- Weight: ${c.weight ?? "—"} | Volume: ${c.volume ?? "—"}`);
-          if (c.warrantyMonths) lines.push(`- Warranty: ${c.warrantyMonths} months`);
-          if (sup?.name) lines.push(`- Supplier: ${sup.name} (${sup.identificationNumber ?? "—"})`);
-          if (cat?.name) lines.push(`- Category: ${cat.name} (${cat.code ?? "—"})`);
-          if (grp?.name) lines.push(`- Group: ${grp.name} (${grp.code ?? "—"})`);
-          if (wh?.name) lines.push(`- Warehouse: ${wh.name} (${wh.code ?? "—"})`);
+          lines.push(`## ${c.name ?? "—"} (#${c.id ?? "?"}) [${c.shortCut ?? "—"}]`);
+          lines.push(`- Unit: ${c.unit ?? "—"}`);
           if (c.description) lines.push(`- ${c.description}`);
           if (c.note) lines.push(`- Note: ${c.note}`);
           lines.push("");
@@ -68,23 +45,23 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
 
   server.tool(
     "m3_stock_lists",
-    "Query stock lists — warehouses and price levels (read-only)",
+    "Query warehouses and price levels (read-only)",
     {},
     async () => {
       try {
-        const gql = `{ stockLists {
-        warehouses { items { id name code } }
-        priceLevels { items { id name code } }
-      } }`;
-        const data = await m3.query<{ stockLists: { warehouses: { items: Record<string, unknown>[] }; priceLevels: { items: Record<string, unknown>[] } } }>(gql);
-        const sl = data.stockLists;
+        const whGql = `{ warehouses(take: 100) { items { id shortCut name } totalCount } }`;
+        const plGql = `{ priceLevels(take: 100) { items { id shortCut name } totalCount } }`;
+        const [whData, plData] = await Promise.all([
+          m3.query<{ warehouses: { items: Record<string, unknown>[]; totalCount: number } }>(whGql),
+          m3.query<{ priceLevels: { items: Record<string, unknown>[]; totalCount: number } }>(plGql),
+        ]);
         const lines = ["# Stock Lists", "", "## Warehouses"];
-        for (const w of sl?.warehouses?.items ?? []) {
-          lines.push(`- ${w.name ?? "—"} (code: ${w.code ?? "—"}, id: ${w.id ?? "?"})`);
+        for (const w of whData.warehouses?.items ?? []) {
+          lines.push(`- ${w.name ?? "—"} (shortCut: ${w.shortCut ?? "—"}, id: ${w.id ?? "?"})`);
         }
         lines.push("", "## Price Levels");
-        for (const p of sl?.priceLevels?.items ?? []) {
-          lines.push(`- ${p.name ?? "—"} (code: ${p.code ?? "—"}, id: ${p.id ?? "?"})`);
+        for (const p of plData.priceLevels?.items ?? []) {
+          lines.push(`- ${p.name ?? "—"} (shortCut: ${p.shortCut ?? "—"}, id: ${p.id ?? "?"})`);
         }
         return textResult(lines.join("\n"));
       } catch (err) {
@@ -104,57 +81,50 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ stockDocuments(${buildArgs(take, skip, where, order)}) {
+        const gql = `{ receivedSlips(${buildArgs(take, skip, where, order)}) {
         items {
           id documentNumber dateOfIssue
-          totalPriceHcWithVat totalPriceHcWithoutVat
+          totalWithVatHc
           partnerAddress {
-            businessAddress { name street city zip }
-            company { identificationNumber }
+            businessAddress { name street municipality postalCode country }
+            identificationNumber
           }
-          costCenter { code name }
-          project { code name }
-          activity { code name }
-          warehouse { name code }
-          items { description amount unitPriceHc vatRate serialNumber discount }
-          text note
+          centre { shortCut name }
+          jobOrder { shortCut name }
+          operation { shortCut name }
+          items { description amount unitPriceHc vatRate }
+          description
         }
         totalCount
       } }`;
 
-        const data = await m3.query<{ stockDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const sd = data.stockDocuments;
+        const data = await m3.query<{ receivedSlips: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const sd = data.receivedSlips;
         if (!sd?.items?.length) return textResult("No stock documents found.");
 
         const lines = [`# Stock Documents (${sd.items.length} of ${sd.totalCount})`, ""];
         for (const d of sd.items) {
           const partner = d.partnerAddress as Record<string, unknown> | undefined;
           const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-          const co = partner?.company as Record<string, unknown> | undefined;
-          const cc = d.costCenter as Record<string, unknown> | undefined;
-          const proj = d.project as Record<string, unknown> | undefined;
-          const act = d.activity as Record<string, unknown> | undefined;
-          const wh = d.warehouse as Record<string, unknown> | undefined;
+          const cc = d.centre as Record<string, unknown> | undefined;
+          const proj = d.jobOrder as Record<string, unknown> | undefined;
+          const act = d.operation as Record<string, unknown> | undefined;
           const items = d.items as Array<Record<string, unknown>> | undefined;
 
           lines.push(`## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`);
-          lines.push(`- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"})`);
-          lines.push(`- Total: ${d.totalPriceHcWithVat ?? "?"} (without VAT: ${d.totalPriceHcWithoutVat ?? "?"})`);
-          if (wh?.name) lines.push(`- Warehouse: ${wh.name} (${wh.code ?? "—"})`);
+          lines.push(`- Partner: ${biz?.name ?? "—"} (ICO: ${partner?.identificationNumber ?? "—"})`);
+          lines.push(`- Total: ${d.totalWithVatHc ?? "?"}`);
 
-          const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
+          const ctrl = [cc?.shortCut && `CC:${cc.shortCut}`, proj?.shortCut && `Proj:${proj.shortCut}`, act?.shortCut && `Act:${act.shortCut}`].filter(Boolean);
           if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
 
           if (items && items.length > 0) {
             lines.push("- Items:");
             for (const it of items) {
-              const disc = it.discount ? ` (-${it.discount}%)` : "";
-              const sn = it.serialNumber ? ` SN:${it.serialNumber}` : "";
-              lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0}${disc}${sn}`);
+              lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0}`);
             }
           }
-          if (d.text) lines.push(`- Text: ${d.text}`);
-          if (d.note) lines.push(`- Note: ${d.note}`);
+          if (d.description) lines.push(`- Description: ${d.description}`);
           lines.push("");
         }
         return textResult(lines.join("\n"));
@@ -186,30 +156,20 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     async (params) => {
       try {
         const fields = [
-          `catalogueNumber: "${escGql(params.catalogueNumber)}"`,
+          `shortCut: "${escGql(params.catalogueNumber)}"`,
           `name: "${escGql(params.name)}"`,
           `unit: "${escGql(params.unit)}"`,
-          params.sellingPriceHc != null ? `sellingPriceHc: ${params.sellingPriceHc}` : "",
-          params.purchasePriceHc != null ? `purchasePriceHc: ${params.purchasePriceHc}` : "",
-          params.ean ? `ean: "${escGql(params.ean)}"` : "",
-          params.weight != null ? `weight: ${params.weight}` : "",
-          params.minimumStock != null ? `minimumStock: ${params.minimumStock}` : "",
-          params.maximumStock != null ? `maximumStock: ${params.maximumStock}` : "",
-          params.warrantyMonths != null ? `warrantyMonths: ${params.warrantyMonths}` : "",
-          params.categoryCode ? `category: { code: "${escGql(params.categoryCode)}" }` : "",
-          params.groupCode ? `group: { code: "${escGql(params.groupCode)}" }` : "",
-          params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
         ].filter(Boolean).join(", ");
 
         const gql = `mutation {
-  createStockCard(
-    stockCard: { ${fields} }
+  createArticle(
+    article: { ${fields} }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createStockCard: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createStockCard;
+        const data = await m3.query<{ createArticle: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createArticle;
         return textResult(`Stock card "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -253,15 +213,15 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
         const extras = [
           params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" } }` : "",
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
-          params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
+          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
+          params.warehouseCode ? `warehouse: { shortCut: "${escGql(params.warehouseCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
-  createStockDocument(
-    stockDocument: {
+  createReceivedSlip(
+    receivedSlip: {
       dateOfIssue: "${escGql(params.dateOfIssue)}"
       ${extras}
       items: [${itemsGql}]
@@ -270,8 +230,8 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createStockDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createStockDocument;
+        const data = await m3.query<{ createReceivedSlip: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createReceivedSlip;
         return textResult(`Stock document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -292,12 +252,12 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       try {
         const extras = [
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.warehouseCode ? `warehouse: { code: "${escGql(params.warehouseCode)}" }` : "",
+          params.warehouseCode ? `warehouse: { shortCut: "${escGql(params.warehouseCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
-  createInventoryDocument(
-    inventoryDocument: {
+  createStockTakingDocument(
+    stockTakingDocument: {
       dateOfIssue: "${escGql(params.dateOfIssue)}"
       ${extras}
     }
@@ -305,8 +265,8 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createInventoryDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createInventoryDocument;
+        const data = await m3.query<{ createStockTakingDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createStockTakingDocument;
         return textResult(`Inventory document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);

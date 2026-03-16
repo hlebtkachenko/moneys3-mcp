@@ -5,62 +5,55 @@ import { escGql, buildArgs, textResult, errorResult } from "./helpers.js";
 
 const ADDRESS_FIELDS = `
   items {
-    id shortcut
-    businessAddress { name street city zip country countryCode }
-    invoiceAddress { name street city zip country }
-    company { identificationNumber vatNumber taxNumber }
-    contact { phone mobile fax email web }
-    bankAccounts { bankCode accountNumber iban swift currency { code } }
-    group { name code }
-    discount defaultMaturityDaysReceivable defaultMaturityDaysPayable
-    creditLimit creditLimitCurrency { code }
-    isVatPayer isPhysicalPerson
-    note
+    id guid code
+    identificationNumber vatIdentificationNumber
+    isPerson isVatPayer
+    email phoneNumber mobileNumber www
+    bankName accountNumber bankCode
+    discount note message
+    maturityReceivablesDays maturityLiabilitiesDays
+    creditValue isCredit
+    businessAddress { name street municipality countryName municipalityPostalCode { postalCode } }
+    deliveryAddress { name street municipality countryName }
+    addressGroup { name }
+    bankAccounts { bankName accountNumber bankCode }
   }
   totalCount
 `;
 
 function formatContact(c: Record<string, unknown>): string {
   const biz = c.businessAddress as Record<string, unknown> | undefined;
-  const inv = c.invoiceAddress as Record<string, unknown> | undefined;
-  const co = c.company as Record<string, unknown> | undefined;
-  const ct = c.contact as Record<string, unknown> | undefined;
+  const bizPostal = biz?.municipalityPostalCode as Record<string, unknown> | undefined;
   const banks = c.bankAccounts as Array<Record<string, unknown>> | undefined;
-  const grp = c.group as Record<string, unknown> | undefined;
+  const grp = c.addressGroup as Record<string, unknown> | undefined;
 
   const lines = [
-    `## ${biz?.name ?? "Unnamed"} (#${c.id ?? "?"})${c.shortcut ? ` [${c.shortcut}]` : ""}`,
-    `- Address: ${[biz?.street, biz?.city, biz?.zip, biz?.country].filter(Boolean).join(", ") || "—"}`,
-    `- ICO: ${co?.identificationNumber ?? "—"} | VAT: ${co?.vatNumber ?? "—"} | Tax: ${co?.taxNumber ?? "—"}`,
-    `- VAT payer: ${c.isVatPayer ? "Yes" : "No"} | Physical person: ${c.isPhysicalPerson ? "Yes" : "No"}`,
+    `## ${biz?.name ?? "Unnamed"} (#${c.id ?? "?"})${c.code ? ` [${c.code}]` : ""}`,
+    `- Address: ${[biz?.street, biz?.municipality, bizPostal?.postalCode, biz?.countryName].filter(Boolean).join(", ") || "—"}`,
+    `- ICO: ${c.identificationNumber ?? "—"} | VAT: ${c.vatIdentificationNumber ?? "—"}`,
+    `- VAT payer: ${c.isVatPayer ? "Yes" : "No"} | Person: ${c.isPerson ? "Yes" : "No"}`,
   ];
 
-  if (inv?.name && inv.name !== biz?.name) {
-    lines.push(`- Invoice address: ${[inv.name, inv.street, inv.city, inv.zip].filter(Boolean).join(", ")}`);
-  }
+  const contactParts = [c.email, c.phoneNumber, c.mobileNumber, c.www].filter(Boolean);
+  if (contactParts.length > 0) lines.push(`- Contact: ${contactParts.join(" | ")}`);
 
-  if (ct) {
-    const parts = [ct.email, ct.phone, ct.mobile, ct.web].filter(Boolean);
-    if (parts.length > 0) lines.push(`- Contact: ${parts.join(" | ")}`);
+  if (c.accountNumber || c.bankCode) {
+    lines.push(`- Bank: ${c.accountNumber ?? ""}/${c.bankCode ?? ""} (${c.bankName ?? "—"})`);
   }
 
   if (banks && banks.length > 0) {
     for (const b of banks) {
-      const cur = b.currency as Record<string, unknown> | undefined;
-      lines.push(`- Bank: ${b.accountNumber ?? ""}/${b.bankCode ?? ""} (IBAN: ${b.iban ?? "—"}, ${cur?.code ?? "CZK"})`);
+      lines.push(`- Bank account: ${b.accountNumber ?? ""}/${b.bankCode ?? ""} (${b.bankName ?? "—"})`);
     }
   }
 
-  if (grp?.name) lines.push(`- Group: ${grp.name} (${grp.code ?? "—"})`);
+  if (grp?.name) lines.push(`- Group: ${grp.name}`);
   if (c.discount) lines.push(`- Discount: ${c.discount}%`);
-  if (c.creditLimit) {
-    const clCur = c.creditLimitCurrency as Record<string, unknown> | undefined;
-    lines.push(`- Credit limit: ${c.creditLimit} ${clCur?.code ?? "CZK"}`);
-  }
+  if (c.isCredit) lines.push(`- Credit limit: ${c.creditValue ?? "—"}`);
 
   const matParts = [];
-  if (c.defaultMaturityDaysReceivable) matParts.push(`receivable: ${c.defaultMaturityDaysReceivable}d`);
-  if (c.defaultMaturityDaysPayable) matParts.push(`payable: ${c.defaultMaturityDaysPayable}d`);
+  if (c.maturityReceivablesDays) matParts.push(`receivable: ${c.maturityReceivablesDays}d`);
+  if (c.maturityLiabilitiesDays) matParts.push(`payable: ${c.maturityLiabilitiesDays}d`);
   if (matParts.length > 0) lines.push(`- Maturity: ${matParts.join(" | ")}`);
 
   if (c.note) lines.push(`- Note: ${c.note}`);
@@ -79,9 +72,9 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ addressBook(${buildArgs(take, skip, where, order)}) { ${ADDRESS_FIELDS} } }`;
-        const data = await m3.query<{ addressBook: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const ab = data.addressBook;
+        const gql = `{ companies(${buildArgs(take, skip, where, order)}) { ${ADDRESS_FIELDS} } }`;
+        const data = await m3.query<{ companies: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const ab = data.companies;
         if (!ab?.items?.length) return textResult("No contacts found.");
         const header = `# Address Book (${ab.items.length} of ${ab.totalCount})\n`;
         return textResult(header + ab.items.map(formatContact).join("\n\n"));
@@ -124,55 +117,40 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
         const addr = [
           `name: "${escGql(params.name)}"`,
           params.street ? `street: "${escGql(params.street)}"` : "",
-          params.city ? `city: "${escGql(params.city)}"` : "",
-          params.zip ? `zip: "${escGql(params.zip)}"` : "",
-          params.country ? `country: "${escGql(params.country)}"` : "",
-          params.countryCode ? `countryCode: "${escGql(params.countryCode)}"` : "",
+          params.city ? `municipality: "${escGql(params.city)}"` : "",
+          params.country ? `countryName: "${escGql(params.country)}"` : "",
         ].filter(Boolean).join(", ");
-
-        const co = [
-          params.identificationNumber ? `identificationNumber: "${escGql(params.identificationNumber)}"` : "",
-          params.vatNumber ? `vatNumber: "${escGql(params.vatNumber)}"` : "",
-        ].filter(Boolean).join(", ");
-
-        const ct = [
-          params.email ? `email: "${escGql(params.email)}"` : "",
-          params.phone ? `phone: "${escGql(params.phone)}"` : "",
-          params.mobile ? `mobile: "${escGql(params.mobile)}"` : "",
-          params.web ? `web: "${escGql(params.web)}"` : "",
-        ].filter(Boolean).join(", ");
-
-        const bankParts = [
-          params.bankAccountNumber ? `accountNumber: "${escGql(params.bankAccountNumber)}"` : "",
-          params.bankCode ? `bankCode: "${escGql(params.bankCode)}"` : "",
-          params.iban ? `iban: "${escGql(params.iban)}"` : "",
-        ].filter(Boolean);
 
         const extras = [
+          params.identificationNumber ? `identificationNumber: "${escGql(params.identificationNumber)}"` : "",
+          params.vatNumber ? `vatIdentificationNumber: "${escGql(params.vatNumber)}"` : "",
           params.isVatPayer != null ? `isVatPayer: ${params.isVatPayer}` : "",
-          params.isPhysicalPerson != null ? `isPhysicalPerson: ${params.isPhysicalPerson}` : "",
+          params.isPhysicalPerson != null ? `isPerson: ${params.isPhysicalPerson}` : "",
+          params.email ? `email: "${escGql(params.email)}"` : "",
+          params.phone ? `phoneNumber: "${escGql(params.phone)}"` : "",
+          params.mobile ? `mobileNumber: "${escGql(params.mobile)}"` : "",
+          params.web ? `www: "${escGql(params.web)}"` : "",
+          params.bankAccountNumber ? `accountNumber: "${escGql(params.bankAccountNumber)}"` : "",
+          params.bankCode ? `bankCode: "${escGql(params.bankCode)}"` : "",
           params.discount != null ? `discount: ${params.discount}` : "",
-          params.creditLimit != null ? `creditLimit: ${params.creditLimit}` : "",
-          params.maturityDaysReceivable != null ? `defaultMaturityDaysReceivable: ${params.maturityDaysReceivable}` : "",
-          params.maturityDaysPayable != null ? `defaultMaturityDaysPayable: ${params.maturityDaysPayable}` : "",
-          params.groupCode ? `group: { code: "${escGql(params.groupCode)}" }` : "",
-          bankParts.length > 0 ? `bankAccounts: [{ ${bankParts.join(", ")} }]` : "",
+          params.creditLimit != null ? `creditValue: ${params.creditLimit}` : "",
+          params.creditLimit != null ? `isCredit: true` : "",
+          params.maturityDaysReceivable != null ? `maturityReceivablesDays: ${params.maturityDaysReceivable}` : "",
+          params.maturityDaysPayable != null ? `maturityLiabilitiesDays: ${params.maturityDaysPayable}` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
-  createAddress(
-    address: {
+  createCompany(
+    company: {
       businessAddress: { ${addr} }
-      ${co ? `company: { ${co} }` : ""}
-      ${ct ? `contact: { ${ct} }` : ""}
       ${extras}
     }
     definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createAddress: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createAddress;
+        const data = await m3.query<{ createCompany: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.createCompany;
         return textResult(`Contact "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -188,9 +166,9 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ id }) => {
       try {
-        const gql = `mutation { deleteAddress(address: { id: ${id} }) { guid isSuccess } }`;
-        const data = await m3.query<{ deleteAddress: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.deleteAddress;
+        const gql = `mutation { deleteCompany(company: { id: ${id} }) { guid isSuccess } }`;
+        const data = await m3.query<{ deleteCompany: { guid: string; isSuccess: boolean } }>(gql, true);
+        const result = data.deleteCompany;
         return textResult(`Address #${id} ${result.isSuccess ? "deleted" : "deletion queued"}.\nGUID: \`${result.guid}\``);
       } catch (err) {
         return errorResult((err as Error).message);

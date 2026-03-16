@@ -71,7 +71,7 @@ export class MoneyS3Client {
   }
 
   get tokenUrl(): string {
-    return `${this.baseUrl}/connect/token?AppId=${encodeURIComponent(this.appId)}`;
+    return `${this.baseUrl}/connect/token?AppId=${this.appId}`;
   }
 
   setAgendaGuid(guid: string): void {

@@ -58,53 +58,7 @@ export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
     },
   );
 
-  server.tool(
-    "m3_payroll",
-    "Query payroll records with detailed breakdown. Read-only.",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter, e.g. filter by period"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ payroll(${buildArgs(take, skip, where, order)}) {
-        items {
-          id employee { firstName lastName personalNumber }
-          period year month
-          grossSalary netSalary
-          socialInsurance healthInsurance incomeTax
-          employerSocialInsurance employerHealthInsurance
-          costCenter { code name }
-        }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ payroll: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const pr = data.payroll;
-        if (!pr?.items?.length) return textResult("No payroll records found.");
-
-        const lines = [`# Payroll (${pr.items.length} of ${pr.totalCount})`, ""];
-        for (const r of pr.items) {
-          const emp = r.employee as Record<string, unknown> | undefined;
-          const cc = r.costCenter as Record<string, unknown> | undefined;
-          lines.push(`## ${emp?.firstName ?? ""} ${emp?.lastName ?? ""} (${emp?.personalNumber ?? "?"})`);
-          lines.push(`- Period: ${r.period ?? `${r.year ?? "?"}/${r.month ?? "?"}`}`);
-          lines.push(`- Gross: ${r.grossSalary ?? "?"} | Net: ${r.netSalary ?? "?"}`);
-          lines.push(`- Employee: social ${r.socialInsurance ?? "?"} | health ${r.healthInsurance ?? "?"} | tax ${r.incomeTax ?? "?"}`);
-          if (r.employerSocialInsurance || r.employerHealthInsurance) {
-            lines.push(`- Employer: social ${r.employerSocialInsurance ?? "?"} | health ${r.employerHealthInsurance ?? "?"}`);
-          }
-          if (cc?.code) lines.push(`- Cost center: ${cc.code} (${cc.name ?? "—"})`);
-          lines.push("");
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
-  );
+  // Note: payroll query does not exist in the API schema. Use createWage mutation for wages.
 
   server.tool(
     "m3_service_repairs",
@@ -117,39 +71,26 @@ export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ serviceRepairs(${buildArgs(take, skip, where, order)}) {
+        const gql = `{ services(${buildArgs(take, skip, where, order)}) {
         items {
           id documentNumber dateOfIssue
-          description status
-          partnerAddress { businessAddress { name } company { identificationNumber } }
-          costCenter { code name }
-          items { description amount unitPriceHc }
+          description
+          centre { shortCut name }
         }
         totalCount
       } }`;
 
-        const data = await m3.query<{ serviceRepairs: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const sr = data.serviceRepairs;
+        const data = await m3.query<{ services: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const sr = data.services;
         if (!sr?.items?.length) return textResult("No service/repair records found.");
 
         const lines = [`# Service & Repairs (${sr.items.length} of ${sr.totalCount})`, ""];
         for (const r of sr.items) {
-          const partner = r.partnerAddress as Record<string, unknown> | undefined;
-          const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-          const co = partner?.company as Record<string, unknown> | undefined;
-          const cc = r.costCenter as Record<string, unknown> | undefined;
-          const items = r.items as Array<Record<string, unknown>> | undefined;
+          const cc = r.centre as Record<string, unknown> | undefined;
 
-          lines.push(`## ${r.documentNumber ?? "—"} (${r.dateOfIssue ?? "—"}) — Status: ${r.status ?? "—"}`);
-          lines.push(`- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"})`);
-          if (cc?.code) lines.push(`- Cost center: ${cc.code} (${cc.name ?? "—"})`);
+          lines.push(`## ${r.documentNumber ?? "—"} (${r.dateOfIssue ?? "—"})`);
+          if (cc?.shortCut) lines.push(`- Cost center: ${cc.shortCut} (${cc.name ?? "—"})`);
           if (r.description) lines.push(`- ${r.description}`);
-          if (items && items.length > 0) {
-            lines.push("- Items:");
-            for (const it of items) {
-              lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0}`);
-            }
-          }
           lines.push("");
         }
         return textResult(lines.join("\n"));

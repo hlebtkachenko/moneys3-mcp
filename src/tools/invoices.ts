@@ -5,25 +5,23 @@ import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from ".
 
 const INVOICE_FIELDS = `
   items {
-    id dateOfIssue dateOfTaxing dateOfMaturity dateOfPayment
-    documentNumber variableSymbol constantSymbol specificSymbol
-    totalPriceHcWithVat totalPriceHcWithoutVat
-    remainingToPay isSettled isCreditNote
+    id documentNumber dateOfIssue dateOfTaxing dateOfMaturity dateOfPayment
+    variableSymbol specificSymbol pairingSymbol
+    isCreditNote isBilled
+    totalWithVatHc amountToPayHc remainingAmountToPayHc
+    description year
     currency { code }
-    vatSummary {
-      baseZeroRate baseReducedRate baseStandardRate
-      vatReducedRate vatStandardRate
-    }
+    vatRateSummaryHc { vatRate totalWithoutVat totalVat }
     partnerAddress {
-      businessAddress { name street city zip country }
-      company { identificationNumber vatNumber }
+      businessAddress { name street municipality postalCode country }
+      identificationNumber vatIdentificationNumber
     }
-    items { description plu amount unitPriceHc vatRate discount }
-    costCenter { code name }
-    project { code name }
-    activity { code name }
-    account predefinedEntry
-    text note
+    items { description amount unitPriceHc vatRate discountPercentage plu }
+    centre { shortCut name }
+    jobOrder { shortCut name }
+    operation { shortCut name }
+    accountAssignment { accountAssignmentAcc { shortCut } }
+    constantSymbol { code }
   }
   totalCount
 `;
@@ -31,49 +29,47 @@ const INVOICE_FIELDS = `
 function formatInvoice(inv: Record<string, unknown>): string {
   const partner = inv.partnerAddress as Record<string, unknown> | undefined;
   const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-  const co = partner?.company as Record<string, unknown> | undefined;
   const items = inv.items as Array<Record<string, unknown>> | undefined;
   const cur = inv.currency as Record<string, unknown> | undefined;
-  const vat = inv.vatSummary as Record<string, unknown> | undefined;
-  const cc = inv.costCenter as Record<string, unknown> | undefined;
-  const proj = inv.project as Record<string, unknown> | undefined;
-  const act = inv.activity as Record<string, unknown> | undefined;
+  const vatSummary = inv.vatRateSummaryHc as Array<Record<string, unknown>> | undefined;
+  const cc = inv.centre as Record<string, unknown> | undefined;
+  const proj = inv.jobOrder as Record<string, unknown> | undefined;
+  const act = inv.operation as Record<string, unknown> | undefined;
+  const aa = inv.accountAssignment as Record<string, unknown> | undefined;
+  const aaAcc = aa?.accountAssignmentAcc as Record<string, unknown> | undefined;
+  const ks = inv.constantSymbol as Record<string, unknown> | undefined;
 
   const lines = [
     `## ${inv.documentNumber ?? "—"}${inv.isCreditNote ? " [CREDIT NOTE]" : ""}`,
     `- Date: ${inv.dateOfIssue ?? "—"} | Taxing: ${inv.dateOfTaxing ?? "—"} | Maturity: ${inv.dateOfMaturity ?? "—"}`,
-    `- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"}, VAT: ${co?.vatNumber ?? "—"})`,
-    `- Address: ${[biz?.street, biz?.city, biz?.zip, biz?.country].filter(Boolean).join(", ") || "—"}`,
-    `- VS: ${inv.variableSymbol ?? "—"} | KS: ${inv.constantSymbol ?? "—"} | SS: ${inv.specificSymbol ?? "—"}`,
-    `- Total: ${inv.totalPriceHcWithVat ?? "?"} ${cur?.code ?? "CZK"} (without VAT: ${inv.totalPriceHcWithoutVat ?? "?"})`,
-    `- Paid: ${inv.isSettled ? `Yes (${inv.dateOfPayment ?? "—"})` : `No — remaining: ${inv.remainingToPay ?? "?"}`}`,
+    `- Partner: ${biz?.name ?? "—"} (ICO: ${partner?.identificationNumber ?? "—"}, VAT: ${partner?.vatIdentificationNumber ?? "—"})`,
+    `- Address: ${[biz?.street, biz?.municipality, biz?.postalCode, biz?.country].filter(Boolean).join(", ") || "—"}`,
+    `- VS: ${inv.variableSymbol ?? "—"} | KS: ${ks?.code ?? "—"} | SS: ${inv.specificSymbol ?? "—"}`,
+    `- Total: ${inv.totalWithVatHc ?? "?"} ${cur?.code ?? "CZK"}`,
+    `- Paid: ${inv.isBilled ? `Yes (${inv.dateOfPayment ?? "—"})` : `No — remaining: ${inv.remainingAmountToPayHc ?? "?"}`}`,
   ];
 
-  if (vat) {
-    const vatParts = [];
-    if (vat.baseStandardRate) vatParts.push(`standard base: ${vat.baseStandardRate}, VAT: ${vat.vatStandardRate}`);
-    if (vat.baseReducedRate) vatParts.push(`reduced base: ${vat.baseReducedRate}, VAT: ${vat.vatReducedRate}`);
-    if (vat.baseZeroRate) vatParts.push(`zero-rate: ${vat.baseZeroRate}`);
-    if (vatParts.length > 0) lines.push(`- VAT: ${vatParts.join(" | ")}`);
+  if (vatSummary && vatSummary.length > 0) {
+    const vatParts = vatSummary.map((v) => `${v.vatRate}%: base ${v.totalWithoutVat}, VAT ${v.totalVat}`);
+    lines.push(`- VAT: ${vatParts.join(" | ")}`);
   }
 
-  const controlling = [cc?.code, proj?.code, act?.code].filter(Boolean);
+  const controlling = [cc?.shortCut, proj?.shortCut, act?.shortCut].filter(Boolean);
   if (controlling.length > 0) {
-    lines.push(`- Controlling: ${cc?.code ? `CC:${cc.code}` : ""} ${proj?.code ? `Proj:${proj.code}` : ""} ${act?.code ? `Act:${act.code}` : ""}`.trim());
+    lines.push(`- Controlling: ${cc?.shortCut ? `CC:${cc.shortCut}` : ""} ${proj?.shortCut ? `Proj:${proj.shortCut}` : ""} ${act?.shortCut ? `Act:${act.shortCut}` : ""}`.trim());
   }
 
-  if (inv.account) lines.push(`- Account: ${inv.account} | Entry: ${inv.predefinedEntry ?? "—"}`);
+  if (aaAcc?.shortCut) lines.push(`- Account assignment: ${aaAcc.shortCut}`);
 
   if (items && items.length > 0) {
     lines.push("- Items:");
     for (const it of items) {
-      const disc = it.discount ? ` (-${it.discount}%)` : "";
+      const disc = it.discountPercentage ? ` (-${it.discountPercentage}%)` : "";
       lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)${disc}`);
     }
   }
 
-  if (inv.text) lines.push(`- Text: ${inv.text}`);
-  if (inv.note) lines.push(`- Note: ${inv.note}`);
+  if (inv.description) lines.push(`- Description: ${inv.description}`);
   return lines.join("\n");
 }
 
@@ -176,9 +172,9 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
         const extras = [
           documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
           isCreditNote ? `isCreditNote: true` : "",
-          costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
-          projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
-          activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
+          costCenterCode ? `centre: { shortCut: "${escGql(costCenterCode)}" }` : "",
+          projectCode ? `jobOrder: { shortCut: "${escGql(projectCode)}" }` : "",
+          activityCode ? `operation: { shortCut: "${escGql(activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
@@ -243,9 +239,9 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
 
         const extras = [
           documentNumber ? `documentNumber: "${escGql(documentNumber)}"` : "",
-          costCenterCode ? `costCenter: { code: "${escGql(costCenterCode)}" }` : "",
-          projectCode ? `project: { code: "${escGql(projectCode)}" }` : "",
-          activityCode ? `activity: { code: "${escGql(activityCode)}" }` : "",
+          costCenterCode ? `centre: { shortCut: "${escGql(costCenterCode)}" }` : "",
+          projectCode ? `jobOrder: { shortCut: "${escGql(projectCode)}" }` : "",
+          activityCode ? `operation: { shortCut: "${escGql(activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
