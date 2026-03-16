@@ -12,6 +12,10 @@ import { registerAccountingTools } from "./tools/accounting.js";
 import { registerPayrollTools } from "./tools/payroll.js";
 import { registerControllingTools } from "./tools/controlling.js";
 import { registerGraphQLTools } from "./tools/graphql.js";
+import { registerLookupTools } from "./tools/lookups.js";
+import { registerAccountingMutationTools } from "./tools/mutations-accounting.js";
+import { registerDeleteTools } from "./tools/mutations-delete.js";
+import { registerWageTools } from "./tools/wages.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
@@ -53,5 +57,9 @@ registerAccountingTools(server, client);
 registerPayrollTools(server, client);
 registerControllingTools(server, client);
 registerGraphQLTools(server, client);
+registerLookupTools(server, client);
+registerAccountingMutationTools(server, client);
+registerDeleteTools(server, client);
+registerWageTools(server, client);
 
 await server.connect(new StdioServerTransport());
