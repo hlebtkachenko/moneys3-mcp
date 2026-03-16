@@ -190,28 +190,28 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_internal_document",
     "Create an internal document with controlling variables. Async import queue.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).describe("Date of accounting event (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
-      text: z.string().optional(),
-      totalAmount: z.number().optional(),
-      costCenterCode: z.string().optional().describe("Cost center code"),
-      projectCode: z.string().optional().describe("Project code"),
-      activityCode: z.string().optional().describe("Activity code"),
+      description: z.string().optional().describe("Document description"),
+      variableSymbol: z.string().optional(),
+      costCenterCode: z.string().optional().describe("Cost center shortcut"),
+      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
+      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
       definitionShortcut: z.string().default("_ID").describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
-          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`,
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.text ? `text: "${escGql(params.text)}"` : "",
-          params.totalAmount != null ? `totalPriceHcWithVat: ${params.totalAmount}` : "",
+          params.description ? `description: "${escGql(params.description)}"` : "",
+          params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [
-          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
@@ -234,35 +234,39 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_liability",
     "Create a liability (závazek/payable) with maturity date and controlling vars. Async import queue.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Issue date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Accounting event date (DD.MM.YYYY)"),
       dateOfMaturity: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
-      totalAmount: z.number().describe("Total amount"),
+      description: z.string().optional().describe("Document description"),
       variableSymbol: z.string().optional(),
+      constantSymbol: z.string().optional(),
+      specificSymbol: z.string().optional(),
       partnerName: z.string().optional().describe("Partner/creditor name"),
       partnerIco: z.string().optional().describe("Partner ICO"),
-      costCenterCode: z.string().optional(),
-      projectCode: z.string().optional(),
-      activityCode: z.string().optional(),
-      text: z.string().optional(),
+      costCenterCode: z.string().optional().describe("Cost center shortcut"),
+      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
+      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
       definitionShortcut: z.string().default("_ZV").describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          params.dateOfAccountingEvent ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"` : "",
           params.dateOfMaturity ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"` : "",
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          `totalPriceHcWithVat: ${params.totalAmount}`,
+          params.description ? `description: "${escGql(params.description)}"` : "",
           params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-          params.text ? `text: "${escGql(params.text)}"` : "",
+          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
+          params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [
-          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` company: { identificationNumber: "${escGql(params.partnerIco)}" }` : ""} }` : "",
-          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }` : "",
+          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {
@@ -285,35 +289,39 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_receivable",
     "Create a receivable (pohledávka) with maturity date and controlling vars. Async import queue.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
+      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Issue date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Accounting event date (DD.MM.YYYY)"),
       dateOfMaturity: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
-      totalAmount: z.number().describe("Total amount"),
+      description: z.string().optional().describe("Document description"),
       variableSymbol: z.string().optional(),
+      constantSymbol: z.string().optional(),
+      specificSymbol: z.string().optional(),
       partnerName: z.string().optional().describe("Partner/debtor name"),
       partnerIco: z.string().optional().describe("Partner ICO"),
-      costCenterCode: z.string().optional(),
-      projectCode: z.string().optional(),
-      activityCode: z.string().optional(),
-      text: z.string().optional(),
+      costCenterCode: z.string().optional().describe("Cost center shortcut"),
+      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
+      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
       definitionShortcut: z.string().default("_PH").describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          params.dateOfAccountingEvent ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"` : "",
           params.dateOfMaturity ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"` : "",
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          `totalPriceHcWithVat: ${params.totalAmount}`,
+          params.description ? `description: "${escGql(params.description)}"` : "",
           params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-          params.text ? `text: "${escGql(params.text)}"` : "",
+          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
+          params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [
-          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` company: { identificationNumber: "${escGql(params.partnerIco)}" }` : ""} }` : "",
-          params.costCenterCode ? `costCenter: { code: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `project: { code: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `activity: { code: "${escGql(params.activityCode)}" }` : "",
+          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }` : "",
+          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
+          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
+          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
         ].filter(Boolean).join("\n      ");
 
         const gql = `mutation {

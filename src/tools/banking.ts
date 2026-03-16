@@ -119,27 +119,31 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     "Create a bank document (payment). Supports controlling variables. Async import queue.",
     {
       dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Accounting event date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
-      totalAmount: z.number().describe("Total amount with VAT"),
+      isExpense: z.boolean().optional().describe("True for expense, false for income"),
       variableSymbol: z.string().optional(),
       constantSymbol: z.string().optional(),
       specificSymbol: z.string().optional(),
       partnerName: z.string().optional().describe("Partner company name"),
       partnerIco: z.string().optional().describe("Partner ICO"),
-      costCenterCode: z.string().optional().describe("Cost center code (středisko)"),
-      projectCode: z.string().optional().describe("Project code (zakázka)"),
-      activityCode: z.string().optional().describe("Activity code (činnost)"),
-      text: z.string().optional().describe("Description/note"),
+      costCenterCode: z.string().optional().describe("Cost center shortcut (středisko)"),
+      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
+      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
+      description: z.string().optional().describe("Description/note"),
       definitionShortcut: z.string().default("_BD").describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          params.dateOfAccountingEvent ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"` : "",
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
+          params.isExpense != null ? `isExpense: ${params.isExpense}` : "",
           params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
+          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
           params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
-          params.text ? `description: "${escGql(params.text)}"` : "",
+          params.description ? `description: "${escGql(params.description)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [
@@ -170,20 +174,25 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     "Create a cash desk (register) document. Supports controlling variables. Async import queue.",
     {
       dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Accounting event date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
-      totalAmount: z.number().describe("Total amount with VAT"),
-      costCenterCode: z.string().optional().describe("Cost center code"),
-      projectCode: z.string().optional().describe("Project code"),
-      activityCode: z.string().optional().describe("Activity code"),
-      text: z.string().optional().describe("Description/note"),
+      isExpense: z.boolean().optional().describe("True for expense, false for income"),
+      variableSymbol: z.string().optional(),
+      costCenterCode: z.string().optional().describe("Cost center shortcut"),
+      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
+      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
+      description: z.string().optional().describe("Description/note"),
       definitionShortcut: z.string().default("_PPD").describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
+          params.dateOfAccountingEvent ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"` : "",
           params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.text ? `description: "${escGql(params.text)}"` : "",
+          params.isExpense != null ? `isExpense: ${params.isExpense}` : "",
+          params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
+          params.description ? `description: "${escGql(params.description)}"` : "",
         ].filter(Boolean).join(", ");
 
         const extras = [

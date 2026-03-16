@@ -60,6 +60,16 @@ export class MoneyS3Client {
     this.agendaGuid = config.agendaGuid;
     this.maxRetries = config.maxRetries ?? 3;
     this.cache = new ResponseCache(config.cacheTtl ?? 120);
+
+    if (this.agendaGuid) {
+      process.stderr.write(`[moneys3] Agenda GUID from env: ${this.agendaGuid}\n`);
+    } else {
+      process.stderr.write(`[moneys3] No MONEYS3_AGENDA_GUID env var — agenda must be set via m3_set_agenda\n`);
+    }
+  }
+
+  getAgendaGuid(): string | undefined {
+    return this.agendaGuid;
   }
 
   get baseUrl(): string {
@@ -129,7 +139,11 @@ export class MoneyS3Client {
           Authorization: `Bearer ${token}`,
         };
         if (this.agendaGuid) {
-          headers["AgendaGuid"] = this.agendaGuid;
+          headers["AgendaId"] = this.agendaGuid;
+        } else if (!gql.includes("agendas")) {
+          throw new Error(
+            "No agenda selected. Call m3_connection_test (auto-selects if only one) or m3_set_agenda first.",
+          );
         }
 
         const res = await fetch(this.graphqlUrl, {

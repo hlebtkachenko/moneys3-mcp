@@ -53,6 +53,17 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
           lines.push(`  - ${a.name ?? "Unnamed"}: \`${a.guid}\``);
         }
 
+        const currentAgenda = m3.getAgendaGuid();
+        if (currentAgenda) {
+          const match = agendas.find((a) => a.guid === currentAgenda);
+          lines.push("", `- Active agenda: \`${currentAgenda}\`${match ? ` (${match.name ?? "Unnamed"})` : " (not found in agenda list!)"}`);
+        } else if (agendas.length === 1) {
+          m3.setAgendaGuid(agendas[0].guid);
+          lines.push("", `- Auto-selected the only agenda: \`${agendas[0].guid}\` (${agendas[0].name ?? "Unnamed"})`);
+        } else {
+          lines.push("", "- No agenda selected. Use `m3_set_agenda` to select one before querying data.");
+        }
+
         lines.push("", "Connection successful.");
       } catch (err) {
         lines.push(`- Connection FAILED: ${(err as Error).message}`);
