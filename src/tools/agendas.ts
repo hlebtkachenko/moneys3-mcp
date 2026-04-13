@@ -6,7 +6,7 @@ import { textResult, errorResult } from "./helpers.js";
 interface AgendaItem {
   guid: string;
   name?: string;
-  ico?: string;
+  identificationNumber?: string;
 }
 
 interface AgendaResult {
@@ -20,7 +20,7 @@ export function registerAgendaTools(server: McpServer, m3: MoneyS3Client) {
     {},
     async () => {
       try {
-        const gql = `{ agendas { items { guid name ico } } }`;
+        const gql = `{ agendas { items { guid name identificationNumber } } }`;
         const data = await m3.query<AgendaResult>(gql);
         const items = data.agendas?.items ?? [];
 
@@ -30,10 +30,15 @@ export function registerAgendaTools(server: McpServer, m3: MoneyS3Client) {
 
         const lines = ["# Agendas", ""];
         for (const a of items) {
-          lines.push(`- **${a.name ?? "Unnamed"}** (ICO: ${a.ico ?? "—"})  `);
+          lines.push(
+            `- **${a.name ?? "Unnamed"}** (ICO: ${a.identificationNumber ?? "—"})  `,
+          );
           lines.push(`  GUID: \`${a.guid}\``);
         }
-        lines.push("", "Use `m3_set_agenda` with one of these GUIDs to select the working agenda.");
+        lines.push(
+          "",
+          "Use `m3_set_agenda` with one of these GUIDs to select the working agenda.",
+        );
         return textResult(lines.join("\n"));
       } catch (err) {
         return errorResult((err as Error).message);
@@ -49,10 +54,14 @@ export function registerAgendaTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ guid }) => {
       if (!/^[0-9a-f-]{36}$/i.test(guid)) {
-        return errorResult("Invalid GUID format. Expected UUID like `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.");
+        return errorResult(
+          "Invalid GUID format. Expected UUID like `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.",
+        );
       }
       m3.setAgendaGuid(guid);
-      return textResult(`Active agenda set to \`${guid}\`. All data queries will now target this agenda.`);
+      return textResult(
+        `Active agenda set to \`${guid}\`. All data queries will now target this agenda.`,
+      );
     },
   );
 }

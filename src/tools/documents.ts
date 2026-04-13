@@ -1,7 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from "./helpers.js";
+import {
+  escGql,
+  DATE_RE,
+  DATE_MSG,
+  buildArgs,
+  textResult,
+  errorResult,
+} from "./helpers.js";
 
 const DOC_FIELDS = `
   items {
@@ -48,24 +55,37 @@ function formatDoc(d: Record<string, unknown>): string {
   ];
 
   if (d.dateOfMaturity) {
-    lines.push(`- Maturity: ${d.dateOfMaturity} | Paid: ${d.isSettled ? `Yes (${d.dateOfPayment ?? "—"})` : `No — remaining: ${d.remainingToPay ?? "?"}`}`);
+    lines.push(
+      `- Maturity: ${d.dateOfMaturity} | Paid: ${d.isSettled ? `Yes (${d.dateOfPayment ?? "—"})` : `No — remaining: ${d.remainingToPay ?? "?"}`}`,
+    );
   }
 
   if (vat) {
     const vatParts = [];
-    if (vat.baseStandardRate) vatParts.push(`standard: ${vat.baseStandardRate} + ${vat.vatStandardRate}`);
-    if (vat.baseReducedRate) vatParts.push(`reduced: ${vat.baseReducedRate} + ${vat.vatReducedRate}`);
+    if (vat.baseStandardRate)
+      vatParts.push(
+        `standard: ${vat.baseStandardRate} + ${vat.vatStandardRate}`,
+      );
+    if (vat.baseReducedRate)
+      vatParts.push(`reduced: ${vat.baseReducedRate} + ${vat.vatReducedRate}`);
     if (vatParts.length > 0) lines.push(`- VAT: ${vatParts.join(" | ")}`);
   }
 
-  const ctrl = [cc?.code && `CC:${cc.code}`, proj?.code && `Proj:${proj.code}`, act?.code && `Act:${act.code}`].filter(Boolean);
+  const ctrl = [
+    cc?.code && `CC:${cc.code}`,
+    proj?.code && `Proj:${proj.code}`,
+    act?.code && `Act:${act.code}`,
+  ].filter(Boolean);
   if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
-  if (d.account) lines.push(`- Account: ${d.account} | Entry: ${d.predefinedEntry ?? "—"}`);
+  if (d.account)
+    lines.push(`- Account: ${d.account} | Entry: ${d.predefinedEntry ?? "—"}`);
 
   if (items && items.length > 0) {
     lines.push("- Items:");
     for (const it of items) {
-      lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)`);
+      lines.push(
+        `  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)`,
+      );
     }
   }
 
@@ -74,7 +94,10 @@ function formatDoc(d: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-function formatSimpleDocs(entityName: string, data: { items: Record<string, unknown>[]; totalCount: number }): string {
+function formatSimpleDocs(
+  entityName: string,
+  data: { items: Record<string, unknown>[]; totalCount: number },
+): string {
   if (!data?.items?.length) return `No ${entityName} found.`;
   const header = `# ${entityName} (${data.items.length} of ${data.totalCount})\n`;
   return header + data.items.map(formatDoc).join("\n\n");
@@ -92,9 +115,16 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ internalDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{ internalDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        return textResult(formatSimpleDocs("Internal Documents", data.internalDocuments));
+        const gql = `{ internalDocuments(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{
+          internalDocuments: {
+            items: Record<string, unknown>[];
+            totalCount: number;
+          };
+        }>(gql);
+        return textResult(
+          formatSimpleDocs("Internal Documents", data.internalDocuments),
+        );
       } catch (err) {
         return errorResult((err as Error).message);
       }
@@ -112,8 +142,10 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ liabilities(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{ liabilities: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const gql = `{ liabilities(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{
+          liabilities: { items: Record<string, unknown>[]; totalCount: number };
+        }>(gql);
         return textResult(formatSimpleDocs("Liabilities", data.liabilities));
       } catch (err) {
         return errorResult((err as Error).message);
@@ -132,8 +164,10 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ receivables(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{ receivables: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const gql = `{ receivables(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const data = await m3.query<{
+          receivables: { items: Record<string, unknown>[]; totalCount: number };
+        }>(gql);
         return textResult(formatSimpleDocs("Receivables", data.receivables));
       } catch (err) {
         return errorResult((err as Error).message);
@@ -164,18 +198,31 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
         }
         totalCount
       } }`;
-        const data = await m3.query<{ inventoryDocuments: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
+        const data = await m3.query<{
+          inventoryDocuments: {
+            items: Record<string, unknown>[];
+            totalCount: number;
+          };
+        }>(gql);
         const inv = data.inventoryDocuments;
-        if (!inv?.items?.length) return textResult("No inventory documents found.");
+        if (!inv?.items?.length)
+          return textResult("No inventory documents found.");
 
-        const lines = [`# Inventory Documents (${inv.items.length} of ${inv.totalCount})`, ""];
+        const lines = [
+          `# Inventory Documents (${inv.items.length} of ${inv.totalCount})`,
+          "",
+        ];
         for (const d of inv.items) {
           const wh = d.warehouse as Record<string, unknown> | undefined;
-          lines.push(`## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})${wh?.name ? ` — Warehouse: ${wh.name}` : ""}`);
+          lines.push(
+            `## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})${wh?.name ? ` — Warehouse: ${wh.name}` : ""}`,
+          );
           const items = d.items as Array<Record<string, unknown>> | undefined;
           for (const it of items ?? []) {
             const sc = it.stockCard as Record<string, unknown> | undefined;
-            lines.push(`- ${sc?.name ?? "—"} [${sc?.catalogueNumber ?? "—"}]: expected ${it.expectedAmount ?? "?"}, actual ${it.realAmount ?? "?"}, diff ${it.difference ?? "?"} (@ ${it.unitPriceHc ?? "?"})`);
+            lines.push(
+              `- ${sc?.name ?? "—"} [${sc?.catalogueNumber ?? "—"}]: expected ${it.expectedAmount ?? "?"}, actual ${it.realAmount ?? "?"}, diff ${it.difference ?? "?"} (@ ${it.unitPriceHc ?? "?"})`,
+            );
           }
           lines.push("");
         }
@@ -190,29 +237,54 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_internal_document",
     "Create an internal document with controlling variables. Async import queue.",
     {
-      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).describe("Date of accounting event (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .describe("Date of accounting event (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
       description: z.string().optional().describe("Document description"),
       variableSymbol: z.string().optional(),
       costCenterCode: z.string().optional().describe("Cost center shortcut"),
       projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
-      definitionShortcut: z.string().default("_ID").describe("XML transfer definition shortcut"),
+      activityCode: z
+        .string()
+        .optional()
+        .describe("Activity shortcut (činnost)"),
+      definitionShortcut: z
+        .string()
+        .default("_ID")
+        .describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`,
-          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.description ? `description: "${escGql(params.description)}"` : "",
-          params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-        ].filter(Boolean).join(", ");
+          params.documentNumber
+            ? `documentNumber: "${escGql(params.documentNumber)}"`
+            : "",
+          params.description
+            ? `description: "${escGql(params.description)}"`
+            : "",
+          params.variableSymbol
+            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
 
         const extras = [
-          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
-        ].filter(Boolean).join("\n      ");
+          params.costCenterCode
+            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
+            : "",
+          params.projectCode
+            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
+            : "",
+          params.activityCode
+            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n      ");
 
         const gql = `mutation {
   createInternalDocument(
@@ -221,9 +293,13 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createInternalDocument: { guid: string; isSuccess: boolean } }>(gql, true);
+        const data = await m3.query<{
+          createInternalDocument: { guid: string; isSuccess: boolean };
+        }>(gql, true);
         const result = data.createInternalDocument;
-        return textResult(`Internal document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+        return textResult(
+          `Internal document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
+        );
       } catch (err) {
         return errorResult((err as Error).message);
       }
@@ -234,9 +310,20 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_liability",
     "Create a liability (závazek/payable) with maturity date and controlling vars. Async import queue.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Issue date (DD.MM.YYYY)"),
-      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Accounting event date (DD.MM.YYYY)"),
-      dateOfMaturity: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Maturity date (DD.MM.YYYY)"),
+      dateOfIssue: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .describe("Issue date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .optional()
+        .describe("Accounting event date (DD.MM.YYYY)"),
+      dateOfMaturity: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .optional()
+        .describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
       description: z.string().optional().describe("Document description"),
       variableSymbol: z.string().optional(),
@@ -246,28 +333,60 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
       partnerIco: z.string().optional().describe("Partner ICO"),
       costCenterCode: z.string().optional().describe("Cost center shortcut"),
       projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
-      definitionShortcut: z.string().default("_ZV").describe("XML transfer definition shortcut"),
+      activityCode: z
+        .string()
+        .optional()
+        .describe("Activity shortcut (činnost)"),
+      definitionShortcut: z
+        .string()
+        .default("_ZV")
+        .describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-          params.dateOfAccountingEvent ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"` : "",
-          params.dateOfMaturity ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"` : "",
-          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.description ? `description: "${escGql(params.description)}"` : "",
-          params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
-          params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
-        ].filter(Boolean).join(", ");
+          params.dateOfAccountingEvent
+            ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`
+            : "",
+          params.dateOfMaturity
+            ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"`
+            : "",
+          params.documentNumber
+            ? `documentNumber: "${escGql(params.documentNumber)}"`
+            : "",
+          params.description
+            ? `description: "${escGql(params.description)}"`
+            : "",
+          params.variableSymbol
+            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
+            : "",
+          params.constantSymbol
+            ? `constantSymbol: "${escGql(params.constantSymbol)}"`
+            : "",
+          params.specificSymbol
+            ? `specificSymbol: "${escGql(params.specificSymbol)}"`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
 
         const extras = [
-          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }` : "",
-          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
-        ].filter(Boolean).join("\n      ");
+          params.partnerName
+            ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }`
+            : "",
+          params.costCenterCode
+            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
+            : "",
+          params.projectCode
+            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
+            : "",
+          params.activityCode
+            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n      ");
 
         const gql = `mutation {
   createLiability(
@@ -276,9 +395,13 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createLiability: { guid: string; isSuccess: boolean } }>(gql, true);
+        const data = await m3.query<{
+          createLiability: { guid: string; isSuccess: boolean };
+        }>(gql, true);
         const result = data.createLiability;
-        return textResult(`Liability ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+        return textResult(
+          `Liability ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
+        );
       } catch (err) {
         return errorResult((err as Error).message);
       }
@@ -289,9 +412,20 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "m3_create_receivable",
     "Create a receivable (pohledávka) with maturity date and controlling vars. Async import queue.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Issue date (DD.MM.YYYY)"),
-      dateOfAccountingEvent: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Accounting event date (DD.MM.YYYY)"),
-      dateOfMaturity: z.string().regex(DATE_RE, DATE_MSG).optional().describe("Maturity date (DD.MM.YYYY)"),
+      dateOfIssue: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .describe("Issue date (DD.MM.YYYY)"),
+      dateOfAccountingEvent: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .optional()
+        .describe("Accounting event date (DD.MM.YYYY)"),
+      dateOfMaturity: z
+        .string()
+        .regex(DATE_RE, DATE_MSG)
+        .optional()
+        .describe("Maturity date (DD.MM.YYYY)"),
       documentNumber: z.string().optional(),
       description: z.string().optional().describe("Document description"),
       variableSymbol: z.string().optional(),
@@ -301,28 +435,60 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
       partnerIco: z.string().optional().describe("Partner ICO"),
       costCenterCode: z.string().optional().describe("Cost center shortcut"),
       projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z.string().optional().describe("Activity shortcut (činnost)"),
-      definitionShortcut: z.string().default("_PH").describe("XML transfer definition shortcut"),
+      activityCode: z
+        .string()
+        .optional()
+        .describe("Activity shortcut (činnost)"),
+      definitionShortcut: z
+        .string()
+        .default("_PH")
+        .describe("XML transfer definition shortcut"),
     },
     async (params) => {
       try {
         const fields = [
           `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-          params.dateOfAccountingEvent ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"` : "",
-          params.dateOfMaturity ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"` : "",
-          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.description ? `description: "${escGql(params.description)}"` : "",
-          params.variableSymbol ? `variableSymbol: "${escGql(params.variableSymbol)}"` : "",
-          params.constantSymbol ? `constantSymbol: "${escGql(params.constantSymbol)}"` : "",
-          params.specificSymbol ? `specificSymbol: "${escGql(params.specificSymbol)}"` : "",
-        ].filter(Boolean).join(", ");
+          params.dateOfAccountingEvent
+            ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`
+            : "",
+          params.dateOfMaturity
+            ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"`
+            : "",
+          params.documentNumber
+            ? `documentNumber: "${escGql(params.documentNumber)}"`
+            : "",
+          params.description
+            ? `description: "${escGql(params.description)}"`
+            : "",
+          params.variableSymbol
+            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
+            : "",
+          params.constantSymbol
+            ? `constantSymbol: "${escGql(params.constantSymbol)}"`
+            : "",
+          params.specificSymbol
+            ? `specificSymbol: "${escGql(params.specificSymbol)}"`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
 
         const extras = [
-          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }` : "",
-          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
-        ].filter(Boolean).join("\n      ");
+          params.partnerName
+            ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }`
+            : "",
+          params.costCenterCode
+            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
+            : "",
+          params.projectCode
+            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
+            : "",
+          params.activityCode
+            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n      ");
 
         const gql = `mutation {
   createReceivable(
@@ -331,9 +497,13 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   ) { guid isSuccess }
 }`;
 
-        const data = await m3.query<{ createReceivable: { guid: string; isSuccess: boolean } }>(gql, true);
+        const data = await m3.query<{
+          createReceivable: { guid: string; isSuccess: boolean };
+        }>(gql, true);
         const result = data.createReceivable;
-        return textResult(`Receivable ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
+        return textResult(
+          `Receivable ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
+        );
       } catch (err) {
         return errorResult((err as Error).message);
       }
