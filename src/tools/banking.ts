@@ -12,22 +12,22 @@ import {
 
 const DOC_FIELDS = `
   items {
-    id documentNumber dateOfIssue
-    totalWithVatHc amountToPayHc remainingAmountToPayHc
-    isBilled dateOfPayment
+    id documentNumber isExpense dateOfIssue dateOfPayment dateOfAccountingEvent
+    totalWithVatHc totalWithVat
+    bankStatementNumber
     currency { code }
     vatRateSummaryHc { vatRate totalWithoutVat totalVat }
     partnerAddress {
       businessAddress { name street municipality postalCode country }
       identificationNumber vatIdentificationNumber
     }
-    variableSymbol constantSymbol { code } specificSymbol
+    variableSymbol constantSymbol specificSymbol pairingSymbol
     centre { shortCut name }
     jobOrder { shortCut name }
     operation { shortCut name }
-    accountAssignment { accountAssignmentAcc { shortCut } }
-    description
-    items { description amount unitPriceHc vatRate }
+    accountAssignment { accountAssignmentAcc { shortCut description } }
+    bankAccount { shortCut description }
+    description note
   }
   totalCount
 `;
@@ -44,16 +44,15 @@ function formatBankDoc(d: Record<string, unknown>): string {
   const act = d.operation as Record<string, unknown> | undefined;
   const aa = d.accountAssignment as Record<string, unknown> | undefined;
   const aaAcc = aa?.accountAssignmentAcc as Record<string, unknown> | undefined;
-  const ks = d.constantSymbol as Record<string, unknown> | undefined;
-  const items = d.items as Array<Record<string, unknown>> | undefined;
+  const ba = d.bankAccount as Record<string, unknown> | undefined;
 
+  const type = d.isExpense ? "Expense" : "Receipt";
   const lines = [
-    `## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`,
+    `## ${d.documentNumber ?? "—"} [${type}] (${d.dateOfPayment ?? d.dateOfIssue ?? "—"})`,
     `- Partner: ${biz?.name ?? "—"} (ICO: ${partner?.identificationNumber ?? "—"})`,
-    `- Address: ${[biz?.street, biz?.municipality, biz?.postalCode, biz?.country].filter(Boolean).join(", ") || "—"}`,
-    `- VS: ${d.variableSymbol ?? "—"} | KS: ${ks?.code ?? "—"} | SS: ${d.specificSymbol ?? "—"}`,
+    `- VS: ${d.variableSymbol ?? "—"} | KS: ${d.constantSymbol ?? "—"} | SS: ${d.specificSymbol ?? "—"}`,
     `- Total: ${d.totalWithVatHc ?? "?"} ${cur?.code ?? "CZK"}`,
-    `- Paid: ${d.isBilled ? `Yes (${d.dateOfPayment ?? "—"})` : `No — remaining: ${d.remainingAmountToPayHc ?? "?"}`}`,
+    `- Bank account: ${ba?.shortCut ?? "—"} (${ba?.description ?? "—"})`,
   ];
 
   if (vatSummary && vatSummary.length > 0) {
@@ -69,18 +68,10 @@ function formatBankDoc(d: Record<string, unknown>): string {
     act?.shortCut && `Act:${act.shortCut}`,
   ].filter(Boolean);
   if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
-  if (aaAcc?.shortCut) lines.push(`- Account assignment: ${aaAcc.shortCut}`);
-
-  if (items && items.length > 0) {
-    lines.push("- Items:");
-    for (const it of items) {
-      lines.push(
-        `  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)`,
-      );
-    }
-  }
-
+  if (aaAcc?.shortCut)
+    lines.push(`- Predkontace: ${aaAcc.shortCut} (${aaAcc.description ?? ""})`);
   if (d.description) lines.push(`- Description: ${d.description}`);
+  if (d.note) lines.push(`- Note: ${d.note}`);
   return lines.join("\n");
 }
 
