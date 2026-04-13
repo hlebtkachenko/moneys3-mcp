@@ -6,13 +6,14 @@ import {
   DATE_RE,
   DATE_MSG,
   buildArgs,
+  filterDeleted,
   textResult,
   errorResult,
 } from "./helpers.js";
 
 const DOC_FIELDS = `
   items {
-    id documentNumber isExpense dateOfIssue dateOfPayment dateOfAccountingEvent
+    id isDeleted documentNumber isExpense dateOfIssue dateOfPayment dateOfAccountingEvent
     totalWithVatHc totalWithVat
     bankStatementNumber
     currency { code }
@@ -87,7 +88,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ bankStatements(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const gql = `{ bankStatements(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
         const data = await m3.query<{
           bankStatements: {
             items: Record<string, unknown>[];
@@ -95,9 +96,10 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
           };
         }>(gql);
         const bd = data.bankStatements;
-        if (!bd?.items?.length) return textResult("No bank documents found.");
-        const header = `# Bank Documents (${bd.items.length} of ${bd.totalCount})\n`;
-        return textResult(header + bd.items.map(formatBankDoc).join("\n\n"));
+        const items = filterDeleted(bd?.items ?? []);
+        if (!items.length) return textResult("No bank documents found.");
+        const header = `# Bank Documents (${items.length} of ${bd.totalCount})\n`;
+        return textResult(header + items.map(formatBankDoc).join("\n\n"));
       } catch (err) {
         return errorResult((err as Error).message);
       }
@@ -115,7 +117,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ cashVouchers(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const gql = `{ cashVouchers(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
         const data = await m3.query<{
           cashVouchers: {
             items: Record<string, unknown>[];
@@ -123,10 +125,10 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
           };
         }>(gql);
         const cd = data.cashVouchers;
-        if (!cd?.items?.length)
-          return textResult("No cash desk documents found.");
-        const header = `# Cash Desk Documents (${cd.items.length} of ${cd.totalCount})\n`;
-        return textResult(header + cd.items.map(formatBankDoc).join("\n\n"));
+        const items = filterDeleted(cd?.items ?? []);
+        if (!items.length) return textResult("No cash desk documents found.");
+        const header = `# Cash Desk Documents (${items.length} of ${cd.totalCount})\n`;
+        return textResult(header + items.map(formatBankDoc).join("\n\n"));
       } catch (err) {
         return errorResult((err as Error).message);
       }

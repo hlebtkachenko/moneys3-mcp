@@ -6,13 +6,14 @@ import {
   DATE_RE,
   DATE_MSG,
   buildArgs,
+  filterDeleted,
   textResult,
   errorResult,
 } from "./helpers.js";
 
 const INVOICE_FIELDS = `
   items {
-    id documentNumber dateOfIssue dateOfTaxing dateOfMaturity dateOfPayment
+    id isDeleted documentNumber dateOfIssue dateOfTaxing dateOfMaturity dateOfPayment
     variableSymbol specificSymbol pairingSymbol
     isCreditNote isBilled
     totalWithVatHc amountToPayHc remainingAmountToPayHc
@@ -115,7 +116,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const params = buildArgs(take, skip, where, order, true);
+        const params = buildArgs(take, skip, where, order);
         const gql = `{ issuedInvoices(${params}) { ${INVOICE_FIELDS} } }`;
         const data = await m3.query<{
           issuedInvoices: {
@@ -124,13 +125,14 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
           };
         }>(gql);
         const inv = data.issuedInvoices;
+        const items = filterDeleted(inv?.items ?? []);
 
-        if (!inv?.items?.length) {
+        if (!items.length) {
           return textResult("No issued invoices found.");
         }
 
-        const header = `# Issued Invoices (${inv.items.length} of ${inv.totalCount})\n`;
-        const body = inv.items.map(formatInvoice).join("\n\n");
+        const header = `# Issued Invoices (${items.length} of ${inv.totalCount})\n`;
+        const body = items.map(formatInvoice).join("\n\n");
         return textResult(header + body);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -154,7 +156,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const params = buildArgs(take, skip, where, order, true);
+        const params = buildArgs(take, skip, where, order);
         const gql = `{ receivedInvoices(${params}) { ${INVOICE_FIELDS} } }`;
         const data = await m3.query<{
           receivedInvoices: {
@@ -163,13 +165,14 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
           };
         }>(gql);
         const inv = data.receivedInvoices;
+        const items = filterDeleted(inv?.items ?? []);
 
-        if (!inv?.items?.length) {
+        if (!items.length) {
           return textResult("No received invoices found.");
         }
 
-        const header = `# Received Invoices (${inv.items.length} of ${inv.totalCount})\n`;
-        const body = inv.items.map(formatInvoice).join("\n\n");
+        const header = `# Received Invoices (${items.length} of ${inv.totalCount})\n`;
+        const body = items.map(formatInvoice).join("\n\n");
         return textResult(header + body);
       } catch (err) {
         return errorResult((err as Error).message);

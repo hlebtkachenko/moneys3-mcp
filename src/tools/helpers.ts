@@ -13,26 +13,17 @@ export function buildArgs(
   skip: number,
   where?: string,
   order?: string,
-  excludeDeleted = false,
 ): string {
   const parts: string[] = [`take: ${take}`, `skip: ${skip}`];
-  if (excludeDeleted) {
-    const deletedFilter = "isDeleted: { eq: false }";
-    if (where) {
-      const trimmed = where.trim();
-      if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-        parts.push(`where: { ${deletedFilter}, ${trimmed.slice(1)}`);
-      } else {
-        parts.push(`where: { ${deletedFilter}, ${trimmed} }`);
-      }
-    } else {
-      parts.push(`where: { ${deletedFilter} }`);
-    }
-  } else if (where) {
-    parts.push(`where: ${where}`);
-  }
+  if (where) parts.push(`where: ${where}`);
   if (order) parts.push(`order: ${order}`);
   return parts.join(", ");
+}
+
+export function filterDeleted(
+  items: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  return items.filter((item) => !item.isDeleted);
 }
 
 export function textResult(text: string) {

@@ -6,13 +6,14 @@ import {
   DATE_RE,
   DATE_MSG,
   buildArgs,
+  filterDeleted,
   textResult,
   errorResult,
 } from "./helpers.js";
 
 const DOC_FIELDS = `
   items {
-    id documentNumber dateOfIssue dateOfAccounting dateOfMaturity
+    id isDeleted documentNumber dateOfIssue dateOfAccounting dateOfMaturity
     dateOfPayment isSettled remainingToPay
     totalPriceHcWithVat totalPriceHcWithoutVat
     currency { code }
@@ -98,9 +99,10 @@ function formatSimpleDocs(
   entityName: string,
   data: { items: Record<string, unknown>[]; totalCount: number },
 ): string {
-  if (!data?.items?.length) return `No ${entityName} found.`;
-  const header = `# ${entityName} (${data.items.length} of ${data.totalCount})\n`;
-  return header + data.items.map(formatDoc).join("\n\n");
+  const items = filterDeleted(data?.items ?? []);
+  if (!items.length) return `No ${entityName} found.`;
+  const header = `# ${entityName} (${items.length} of ${data.totalCount})\n`;
+  return header + items.map(formatDoc).join("\n\n");
 }
 
 export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
@@ -115,7 +117,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ internalDocuments(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const gql = `{ internalDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
         const data = await m3.query<{
           internalDocuments: {
             items: Record<string, unknown>[];
@@ -142,7 +144,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ liabilities(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const gql = `{ liabilities(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
         const data = await m3.query<{
           liabilities: { items: Record<string, unknown>[]; totalCount: number };
         }>(gql);
@@ -164,7 +166,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     },
     async ({ take, skip, where, order }) => {
       try {
-        const gql = `{ receivables(${buildArgs(take, skip, where, order, true)}) { ${DOC_FIELDS} } }`;
+        const gql = `{ receivables(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
         const data = await m3.query<{
           receivables: { items: Record<string, unknown>[]; totalCount: number };
         }>(gql);
