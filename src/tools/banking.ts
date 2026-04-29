@@ -19,7 +19,7 @@ const DOC_FIELDS = `
     currency { code }
     vatRateSummaryHc { vatRate totalWithoutVat totalVat }
     partnerAddress {
-      businessAddress { name street municipality postalCode country }
+      address { name street municipality postalCode country }
       identificationNumber vatIdentificationNumber
     }
     variableSymbol constantSymbol specificSymbol pairingSymbol
@@ -35,7 +35,7 @@ const DOC_FIELDS = `
 
 function formatBankDoc(d: Record<string, unknown>): string {
   const partner = d.partnerAddress as Record<string, unknown> | undefined;
-  const biz = partner?.businessAddress as Record<string, unknown> | undefined;
+  const biz = partner?.address as Record<string, unknown> | undefined;
   const cur = d.currency as Record<string, unknown> | undefined;
   const vatSummary = d.vatRateSummaryHc as
     | Array<Record<string, unknown>>
