@@ -32,7 +32,10 @@ interface TokenResponse {
 
 interface GraphQLResponse<T = unknown> {
   data?: T;
-  errors?: Array<{ message: string; locations?: Array<{ line: number; column: number }> }>;
+  errors?: Array<{
+    message: string;
+    locations?: Array<{ line: number; column: number }>;
+  }>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -62,9 +65,13 @@ export class MoneyS3Client {
     this.cache = new ResponseCache(config.cacheTtl ?? 120);
 
     if (this.agendaGuid) {
-      process.stderr.write(`[moneys3] Agenda GUID from env: ${this.agendaGuid}\n`);
+      process.stderr.write(
+        `[moneys3] Agenda GUID from env: ${this.agendaGuid}\n`,
+      );
     } else {
-      process.stderr.write(`[moneys3] No MONEYS3_AGENDA_GUID env var — agenda must be set via m3_set_agenda\n`);
+      process.stderr.write(
+        `[moneys3] No MONEYS3_AGENDA_GUID env var — agenda must be set via m3_set_agenda\n`,
+      );
     }
   }
 
@@ -90,7 +97,10 @@ export class MoneyS3Client {
   }
 
   private async fetchToken(): Promise<string> {
-    if (this.accessToken && Date.now() < this.tokenExpiresAt - TOKEN_REFRESH_MARGIN_MS) {
+    if (
+      this.accessToken &&
+      Date.now() < this.tokenExpiresAt - TOKEN_REFRESH_MARGIN_MS
+    ) {
       return this.accessToken;
     }
 
@@ -111,7 +121,7 @@ export class MoneyS3Client {
       const text = (await res.text()).slice(0, 500);
       throw new Error(
         `OAuth2 token request failed (${res.status}): ${text}\n` +
-        "Recovery: Verify MONEYS3_DOMAIN, MONEYS3_APP_ID, MONEYS3_CLIENT_ID, and MONEYS3_CLIENT_SECRET.",
+          "Recovery: Verify MONEYS3_DOMAIN, MONEYS3_APP_ID, MONEYS3_CLIENT_ID, and MONEYS3_CLIENT_SECRET.",
       );
     }
 
@@ -123,7 +133,40 @@ export class MoneyS3Client {
 
   async query<T = unknown>(gql: string, isMutation = false): Promise<T> {
     const cacheKey = `GQL:${gql}`;
-    if (!isMutation && this.cache.enabled) {
+    // Bypass cache for mutable document collections (mutations from outside MCP
+    // — e.g. M3 GUI deletes — won't invalidate our cache, so reads of these
+    // queries must always go to the server).
+    const mutableCollections = [
+      "bankStatements",
+      "cashVouchers",
+      "receivedInvoices",
+      "issuedInvoices",
+      "internalDocuments",
+      "liabilities",
+      "receivables",
+      "journalAccs",
+      "journalTrs",
+      "receivedOrders",
+      "issuedOrders",
+      "receivedOffers",
+      "issuedOffers",
+      "receivedInquiries",
+      "issuedInquiries",
+      "receivedSlips",
+      "issuedSlips",
+      "saleSlips",
+      "transferNotes",
+      "productionNotes",
+      "receivedDeliveryNotes",
+      "issuedDeliveryNotes",
+      "stockTakingDocuments",
+      "warehouseStocks",
+      "importStatus",
+    ];
+    const skipCache = mutableCollections.some((name) =>
+      new RegExp(`\\b${name}\\b`).test(gql),
+    );
+    if (!isMutation && !skipCache && this.cache.enabled) {
       const cached = this.cache.get<T>(cacheKey);
       if (cached !== undefined) return cached;
     }
@@ -176,20 +219,29 @@ export class MoneyS3Client {
         if (!res.ok) {
           let detail = text.slice(0, 500);
           try {
-            const err = JSON.parse(text) as { error?: string; message?: string };
+            const err = JSON.parse(text) as {
+              error?: string;
+              message?: string;
+            };
             detail = (err.error || err.message || text).slice(0, 500);
-          } catch { /* raw text */ }
+          } catch {
+            /* raw text */
+          }
 
           const hint = RECOVERY_HINTS[res.status] || "";
           const hintSuffix = hint ? `\nRecovery: ${hint}` : "";
-          throw new Error(`Money S3 GraphQL ${res.status}: ${detail}${hintSuffix}`);
+          throw new Error(
+            `Money S3 GraphQL ${res.status}: ${detail}${hintSuffix}`,
+          );
         }
 
         let parsed: GraphQLResponse<T>;
         try {
           parsed = JSON.parse(text) as GraphQLResponse<T>;
         } catch {
-          throw new Error(`Money S3 returned invalid JSON: ${text.slice(0, 300)}`);
+          throw new Error(
+            `Money S3 returned invalid JSON: ${text.slice(0, 300)}`,
+          );
         }
 
         if (parsed.errors && parsed.errors.length > 0) {
@@ -201,7 +253,7 @@ export class MoneyS3Client {
           throw new Error("GraphQL response contained no data.");
         }
 
-        if (!isMutation && this.cache.enabled) {
+        if (!isMutation && !skipCache && this.cache.enabled) {
           this.cache.set(cacheKey, parsed.data);
         } else if (isMutation) {
           this.cache.invalidate();
@@ -210,7 +262,10 @@ export class MoneyS3Client {
         return parsed.data;
       } catch (err) {
         lastError = err as Error;
-        if ((err as Error).name === "TimeoutError" && attempt < this.maxRetries) {
+        if (
+          (err as Error).name === "TimeoutError" &&
+          attempt < this.maxRetries
+        ) {
           await sleep(1000 * 2 ** attempt);
           continue;
         }
@@ -221,6 +276,8 @@ export class MoneyS3Client {
       }
     }
 
-    throw lastError ?? new Error("Money S3 GraphQL request failed after retries");
+    throw (
+      lastError ?? new Error("Money S3 GraphQL request failed after retries")
+    );
   }
 }
