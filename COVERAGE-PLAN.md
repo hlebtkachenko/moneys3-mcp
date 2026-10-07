@@ -1,5 +1,7 @@
 # Money S3 MCP — Full API Coverage Plan
 
+> Historical plan from March 2026. Tool names, counts and query names here are out of date; the README tool tables and `npm run check:contract` are current.
+
 ## Summary
 
 The schema defines **16 query types** and **11 mutation input types**. The existing 10 tool files implement **33 tools** covering most major entities. This plan identifies gaps and proposes new tools to achieve full coverage.

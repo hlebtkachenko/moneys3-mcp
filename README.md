@@ -2,11 +2,11 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Node.js Version](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-blue)
 
 MCP server for [Money S3](https://money.cz/) — the Czech/Slovak accounting system by Seyfor. Connects any MCP-compatible AI client to your Money S3 data via the official GraphQL API.
 
-**43 tools** across 10 categories covering invoices, contacts, stock, banking, payroll, accounting, and more.
+**62 tools** covering invoices, contacts, stock, banking, documents, accounting, payroll and lookups, plus a raw GraphQL tool.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ Money S3 with the **API module** installed and configured:
 ```bash
 git clone https://github.com/hlebtkachenko/moneys3-mcp.git
 cd moneys3-mcp
-npm install
+npm ci
 npm run build
 ```
 
@@ -39,7 +39,7 @@ npm run build
 | `MONEYS3_CLIENT_SECRET` | Client Secret from Money S3 API Key | Yes |
 | `MONEYS3_AGENDA_GUID` | Default agenda GUID (skip `m3_set_agenda` step) | No |
 | `MONEYS3_CACHE_TTL` | Response cache lifetime in seconds (default: 120, 0 to disable) | No |
-| `MONEYS3_MAX_RETRIES` | Max retry attempts for failed/rate-limited requests (default: 3) | No |
+| `MONEYS3_MAX_RETRIES` | Max retries for reads that time out and for any request answered 401 or 429 (default: 3). Mutations are never resent after a timeout | No |
 
 ### MCP Client Setup
 
@@ -124,132 +124,138 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 
 ## Available Tools
 
-### Setup (2 tools)
+Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes `destructiveHint: true`, `m3_graphql` `destructiveHint` + `openWorldHint`.
+
+### Setup and utility (6 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_agendas` | List all agendas with GUIDs |
-| `m3_set_agenda` | Set active agenda for subsequent calls |
+| `m3_agendas` | List agendas with GUIDs |
+| `m3_set_agenda` | Set the active agenda for subsequent calls |
+| `m3_connection_test` | Test OAuth2, endpoint and agenda access; auto-selects a single agenda |
+| `m3_import_status` | Show how Money S3 processed a queued write (`importStatus` by import GUID) |
+| `m3_graphql` | Raw GraphQL query or mutation (mutations detected by parsing, never cached or retried) |
+| `m3_orders` | Received or issued orders (`type: received \| issued`) |
 
 ### Invoices (5 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_issued_invoices` | Query issued invoices with VAT breakdown, payment status, controlling variables |
-| `m3_received_invoices` | Query received invoices with VAT breakdown, payment status, controlling variables |
-| `m3_create_issued_invoice` | Create an issued invoice with line items, credit note flag, controlling vars |
-| `m3_create_received_invoice` | Create a received invoice with line items, controlling vars |
+| `m3_issued_invoices` | Issued invoices with VAT summary, payment status, controlling variables |
+| `m3_received_invoices` | Received invoices with VAT summary, payment status, controlling variables |
+| `m3_create_issued_invoice` | Create an issued invoice with partner and line items |
+| `m3_create_received_invoice` | Create a received invoice with partner and line items |
 | `m3_delete_invoice` | Delete an invoice by ID and year |
 
-### Address Book (3 tools)
+### Address book (3 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_address_book` | Query contacts with bank accounts, credit limits, discount, maturity terms |
-| `m3_create_address` | Create contact with banking, credit limit, VAT payer flag, maturity terms |
-| `m3_delete_address` | Delete address book entry |
+| `m3_address_book` | Contacts with addresses, bank accounts, credit limit, discount, maturity terms |
+| `m3_create_address` | Create a contact (address, postal code, country code, banking, credit limit, maturity) |
+| `m3_delete_address` | Delete an address book entry |
 
-### Stock & Inventory (7 tools)
+### Stock (7 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_stock_cards` | Query stock cards with pricing, barcodes, weight, warranty, categories, stock levels |
-| `m3_stock_lists` | List warehouses and price levels |
-| `m3_stock_documents` | Query stock docs with controlling vars, serial numbers, warehouse, discount |
-| `m3_create_stock_card` | Create stock card with barcode, weight, warranty, min/max stock, categories |
-| `m3_create_stock_document` | Create stock doc with controlling vars, serial numbers, warehouse |
-| `m3_inventory_documents` | Query inventory docs with expected vs real amounts and differences |
-| `m3_create_inventory_document` | Create inventory document with warehouse selection |
+| `m3_stock_cards` | Articles: catalogue, description, barcode, PLU, weight |
+| `m3_stock_lists` | Warehouses and price levels |
+| `m3_stock_documents` | Received stock slips with partner and controlling variables |
+| `m3_inventory_documents` | Stocktaking documents with counted amounts |
+| `m3_create_stock_card` | Create an article (catalogue, description, barcode, PLU, weight) |
+| `m3_create_stock_document` | Create a received stock slip with stock items |
+| `m3_create_inventory_document` | Create a stocktaking document with counted items |
 
 ### Banking (5 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_bank_documents` | Query bank docs with VAT breakdown, payment status, controlling variables |
-| `m3_cash_desk_documents` | Query cash desk docs with VAT breakdown, payment status, controlling variables |
-| `m3_create_bank_document` | Create bank doc with all symbols (VS/KS/SS), partner ICO, controlling vars |
-| `m3_create_cash_desk_document` | Create cash desk doc with controlling vars |
-| `m3_bank_accounts` | List bank accounts with IBAN/SWIFT and cash desks |
+| `m3_bank_documents` | Bank documents with statement number, VAT summary, controlling variables |
+| `m3_cash_desk_documents` | Cash desk documents with cash box, VAT summary, controlling variables |
+| `m3_bank_accounts` | Bank accounts and cash boxes |
+| `m3_create_bank_document` | Create a bank document (symbols, partner, bank account, controlling) |
+| `m3_create_cash_desk_document` | Create a cash desk document (partner, cash box, controlling) |
 
-### Documents (8 tools)
-
-| Tool | Description |
-|---|---|
-| `m3_internal_documents` | Query internal docs with VAT, payment status, controlling variables |
-| `m3_liabilities` | Query liabilities with maturity dates, VAT, payment status, controlling vars |
-| `m3_receivables` | Query receivables with maturity dates, VAT, payment status, controlling vars |
-| `m3_inventory_documents` | Query inventory documents |
-| `m3_create_internal_document` | Create internal doc with controlling vars |
-| `m3_create_liability` | Create liability with maturity date, partner ICO, controlling vars |
-| `m3_create_receivable` | Create receivable with maturity date, partner ICO, controlling vars |
-| `m3_delete_invoice` | Delete invoice |
-
-### Accounting (3 tools)
+### Documents (6 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_accounting_journal` | Query journal with controlling variables per entry |
-| `m3_chart_of_accounts` | Query chart of accounts with analytical groups |
-| `m3_predefined_entries` | Query predefined entries with descriptions |
+| `m3_internal_documents` | Internal documents with VAT summary and controlling variables |
+| `m3_liabilities` | Liabilities with maturity, remaining amount, VAT summary |
+| `m3_receivables` | Receivables with maturity, remaining amount, VAT summary |
+| `m3_create_internal_document` | Create an internal document |
+| `m3_create_liability` | Create a liability with partner and maturity |
+| `m3_create_receivable` | Create a receivable with partner and maturity |
 
-### Payroll & HR (3 tools)
+### Accounting (5 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_employees` | Query employees with employment dates, cost center, employment type |
-| `m3_payroll` | Query payroll with employer contributions, cost center |
-| `m3_service_repairs` | Query service/repair records with line items, cost center |
+| `m3_accounting_journal` | Accounting journal with controlling variables |
+| `m3_chart_of_accounts` | Chart of accounts |
+| `m3_predefined_entries` | Predefined entries (předkontace) |
+| `m3_create_account` | Create an account (enum arguments validated as enum names) |
+| `m3_create_predefined_entry` | Create a predefined entry |
+
+### Payroll and service (3 tools)
+
+| Tool | Description |
+|---|---|
+| `m3_employees` | Employees with address, contact, employment dates, cost center |
+| `m3_service_repairs` | Service and repair records |
+| `m3_create_wage` | Create a monthly wage with worked time per employment relationship |
 
 ### Controlling (6 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_cost_centers` | Query cost centers |
-| `m3_projects` | Query projects |
-| `m3_activities` | Query activities |
-| `m3_create_cost_center` | Create cost center (async queue) |
-| `m3_create_project` | Create project (async queue) |
-| `m3_create_activity` | Create activity (async queue) |
+| `m3_cost_centers` | Cost centers (střediska) |
+| `m3_projects` | Projects (zakázky) |
+| `m3_activities` | Activities (činnosti) |
+| `m3_create_cost_center` | Create a cost center |
+| `m3_create_project` | Create a project |
+| `m3_create_activity` | Create an activity |
 
-### Utility (3 tools)
+### Lookups (8 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_connection_test` | Test OAuth2 auth, endpoint, and agenda access |
-| `m3_graphql` | Execute raw GraphQL query/mutation |
-| `m3_orders` | Query order documents |
+| `m3_numerical_series` | Numerical series |
+| `m3_currencies` | Currencies with exchange rates |
+| `m3_vat_classifications` | VAT classifications |
+| `m3_vat_purposes` | VAT purposes |
+| `m3_constant_symbols` | Constant symbols |
+| `m3_countries` | Countries |
+| `m3_flags` | Flags |
+| `m3_crm_activities` | CRM activity records |
+
+### Deletes (8 tools)
+
+| Tool | Description |
+|---|---|
+| `m3_delete_internal_document` | Delete an internal document by ID and year |
+| `m3_delete_liability` | Delete a liability by ID and year |
+| `m3_delete_receivable` | Delete a receivable by ID and year |
+| `m3_delete_bank_document` | Delete a bank document by ID and year |
+| `m3_delete_cash_desk_document` | Delete a cash desk document by ID and year |
+| `m3_delete_stock_card` | Delete an article by ID |
+| `m3_delete_stock_document` | Delete a received stock slip by ID and year |
+| `m3_delete_inventory_document` | Delete a stocktaking document by ID |
 
 ## Data Model
 
-Money S3 operations follow two patterns:
+- **Reading:** GraphQL queries with `take`/`skip` paging and HotChocolate-style `where`/`order` objects. `where` and `order` must each be one GraphQL object (checked before sending).
+- **Deleted records:** Money S3 returns soft-deleted records and does not accept `isDeleted` as a filter. List tools hide them on the current page and say how many were hidden; `totalCount` still counts them.
+- **Writing:** mutations go into Money S3's import queue. A tool reports "queued for import" with an import GUID when `isSuccess` is true and an error when it is false. Check the processing result with `m3_import_status`.
+- **Dates:** create tools accept `YYYY-MM-DD` or `DD.MM.YYYY` and send ISO `YYYY-MM-DD`, as in money.cz's official mutation examples.
+- **Partner:** document creates take a `partner` object (name, street, city, postalCode, countryCode, countryName, identificationNumber, vatIdentificationNumber, email, phone), sent as `partnerAddress`.
 
-- **Reading** — real-time GraphQL queries with `take`/`skip` pagination and HotChocolate-style `where`/`order` filtering
-- **Writing** — asynchronous mutations that go into an import queue; returns a GUID to track processing status
+### Filtering examples
 
-### What's Queried per Entity
-
-Every read tool now requests the maximum useful field set inspired by the [Money S3 XSD schemas](https://github.com/parobok/moneys3/tree/master/xsd):
-
-- **Invoices** — full partner address, VAT summary (base + tax per rate), payment status, credit note flag, line items with discount, controlling variables (cost center / project / activity), account assignment
-- **Contacts** — business + invoice addresses, bank accounts with IBAN/SWIFT, discount, credit limit, default maturity days, VAT payer flag, partner groups
-- **Banking/Cash desk** — VAT summary, remaining to pay, payment date, controlling variables, line items
-- **Documents** — VAT summary, maturity date, payment tracking, controlling variables, line items
-- **Stock cards** — EAN/barcode, weight/volume, min/max stock, warranty, supplier, category/group, warehouse, all pricing tiers
-- **Stock documents** — warehouse, serial numbers, discount, controlling variables
-- **Employees** — entry/departure dates, employment type, cost center, mobile contact
-- **Payroll** — employer social/health insurance contributions, cost center
-- **Accounting journal** — controlling variables per entry, predefined entry reference
-
-### Filtering Examples
-
-Invoices from a specific date:
+Invoices from a date:
 ```
-where: { dateOfIssue: { gt: "2024-01-01" } }
-```
-
-Partner by company name:
-```
-where: { partnerAddress: { businessAddress: { name: { eq: "ACME s.r.o." } } } }
+where: { dateOfIssue: { gte: "2026-01-01" } }
 ```
 
 Sort by date descending:
@@ -259,61 +265,41 @@ order: { dateOfIssue: DESC }
 
 Unpaid receivables:
 ```
-where: { isSettled: { eq: false } }
+where: { remainingAmountToPayHc: { gt: 0 } }
 order: { dateOfMaturity: ASC }
 ```
 
-## Architecture
+## Schema coverage
 
-```
-src/
-├── index.ts              # Entry point, env config, tool registration
-├── moneys3-client.ts     # GraphQL client with OAuth2, retry, cache
-├── cache.ts              # TTL-based response cache
-└── tools/
-    ├── helpers.ts        # escGql utility for injection prevention
-    ├── agendas.ts        # Agenda selection (2)
-    ├── invoices.ts       # Issued/received invoices (5)
-    ├── contacts.ts       # Address book (3)
-    ├── stock.ts          # Stock cards, lists, documents, inventory (7)
-    ├── banking.ts        # Bank & cash desk documents (5)
-    ├── documents.ts      # Internal docs, liabilities, receivables (8)
-    ├── accounting.ts     # Journal, chart of accounts, entries (3)
-    ├── payroll.ts        # Employees, payroll, service (3)
-    ├── controlling.ts    # Cost centers, projects, activities (6)
-    └── graphql.ts        # Raw GraphQL, connection test, orders (3)
+Money S3 publishes no machine-readable schema. [docs/schema-summary.json](docs/schema-summary.json) is a hand-written summary of 16 query types and 11 mutation input types (top-level fields only); a real introspection needs a live Money S3 API server. `npm run check:contract` calls every tool and validates the GraphQL it sends against that summary and lists every path the summary does not cover. Field names outside the summary follow money.cz's official query and mutation examples and are marked as unverified in the code.
+
+## Development
+
+```bash
+npm ci
+npm run build
+npm test                # node:test suite, real tool handlers against a fake Money S3 transport
+npm run check:contract  # validate every tool's GraphQL against docs/schema-summary.json
 ```
 
-Total: ~2,200 lines of TypeScript.
+Layout and design: [ARCHITECTURE.md](ARCHITECTURE.md). Contributor rules: [AGENTS.md](AGENTS.md).
 
 ## Security
 
-- OAuth2 Client Credentials with automatic token refresh
-- Tokens cached in memory with 60s safety margin before expiry
-- All HTTP requests have 30s timeout via `AbortSignal.timeout`
-- Rate limit handling with exponential backoff
-- Automatic retry on 401 (token refresh) and 429 (rate limit)
-- Actionable error messages with context-aware recovery hints
-- Response caching with configurable TTL and mutation-based invalidation
+- OAuth2 client credentials; token kept in memory and refreshed 60 s before expiry
+- 30 s timeout on every request
+- Reads retry on timeout; any request retries on 401 (token refresh) and 429 (rate limit)
+- Mutations are never resent after a timeout or transport error: the tool reports "outcome unknown" and names the tool to verify with
+- Response cache (configurable TTL) for reads only; mutations bypass and clear it; document collections are never cached
+- Tool arguments are encoded as GraphQL literals (strings JSON-escaped, enum values checked against `^[A-Z][A-Z0-9_]*$`), never interpolated raw
+- `m3_graphql` accepts any document (max 10,000 characters) and is annotated destructive
 - No credentials logged or exposed in error messages
-- GraphQL string escaping (`escGql`) on all user-provided mutation parameters
-- Date format validation (DD.MM.YYYY regex) on all create tools
-- Raw GraphQL tool limited to 10KB query size
-
-## Tech Stack
-
-- TypeScript, Node.js 22+
-- `@modelcontextprotocol/sdk` for MCP protocol
-- `zod` for input validation
-- Native `fetch` (no HTTP library dependencies)
-- GraphQL over HTTP POST (no GraphQL client library needed)
-- stdio transport
 
 ## Important Notes
 
-- The GraphQL schema varies by Money S3 version. Some field names may differ in older installations. Use `m3_graphql` for direct schema exploration.
-- Write operations are **asynchronous** — data goes to an import queue and is processed by S3 Automatic. The mutation returns a GUID, not immediate confirmation.
-- Some delete operations fail if the document has dependent records (e.g. cannot delete a received invoice if goods were already dispatched from it).
+- Write operations are **asynchronous**: data goes to the import queue and is processed by S3 Automatic. Check the outcome with `m3_import_status`.
+- `definitionShortcut` names an XML transfer definition configured in your Money S3; defaults follow money.cz's examples.
+- Some deletes fail if the record has dependent records (e.g. a received invoice whose goods were already dispatched).
 - The API service must be running on the Money S3 PC. If requests fail with 502/503, check the S3Api Windows service.
 - Questions about the API can be directed to [api@money.cz](mailto:api@money.cz).
 
