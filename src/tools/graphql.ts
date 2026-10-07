@@ -27,7 +27,7 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_import_status",
     "Check how Money S3 processed a queued write. Pass the import GUID returned by any m3_create_* or m3_delete_* tool. Read-only.",
-    { guid: z.string().uuid().describe("Import GUID returned by a create/delete tool") },
+    { guid: z.guid().describe("Import GUID returned by a create/delete tool") },
     READ,
     // Shape from money.cz's output-message examples (vystupni_zpravy_priklady.pdf):
     // importStatus(importGuid) { guid state stateInfo }. The state values are not
