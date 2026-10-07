@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { buildArgs, textResult, errorResult } from "./helpers.js";
+import { READ, buildArgs, textResult, errorResult } from "./helpers.js";
 
 export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -13,6 +13,7 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ journalAccs(${buildArgs(take, skip, where, order)}) {
@@ -70,6 +71,7 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
       skip: z.number().min(0).default(0),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, order }) => {
       try {
         const gql = `{ accountCharts(${buildArgs(take, skip, undefined, order)}) {
@@ -100,6 +102,7 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
       skip: z.number().min(0).default(0),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, order }) => {
       try {
         const gql = `{ accountAssignmentAccs(${buildArgs(take, skip, undefined, order)}) {

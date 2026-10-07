@@ -1,68 +1,59 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql, DATE_RE, DATE_MSG, buildArgs, textResult, errorResult } from "./helpers.js";
+import {
+  CREATE,
+  READ,
+  controllingInput,
+  controllingParams,
+  controllingText,
+  dateParam,
+  definitionParam,
+  errorResult,
+  isoDate,
+  listParams,
+  listTool,
+  partnerInput,
+  partnerSchema,
+  runMutation,
+  str,
+  textResult,
+} from "./helpers.js";
+
+// Article fields mirror the warehouseStocks.article example in query_priklady.pdf;
+// the `articles` root itself is not in the schema summary (unverified).
+const ARTICLE_FIELDS = "id guid catalogue description barCode plu weight articleItemType";
 
 export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_stock_cards",
-    "Query stock/inventory cards with full detail: pricing, stock levels, barcodes, weight, warranty, categories",
-    {
-      take: z.number().min(1).max(100).default(20).describe("Number of records"),
-      skip: z.number().min(0).default(0).describe("Records to skip"),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ articles(${buildArgs(take, skip, where, order)}) {
-        items {
-          id shortCut name description
-          unit
-          note
-        }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ articles: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const sc = data.articles;
-        if (!sc?.items?.length) return textResult("No stock cards found.");
-
-        const lines = [`# Stock Cards (${sc.items.length} of ${sc.totalCount})`, ""];
-        for (const c of sc.items) {
-          lines.push(`## ${c.name ?? "—"} (#${c.id ?? "?"}) [${c.shortCut ?? "—"}]`);
-          lines.push(`- Unit: ${c.unit ?? "—"}`);
-          if (c.description) lines.push(`- ${c.description}`);
-          if (c.note) lines.push(`- Note: ${c.note}`);
-          lines.push("");
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query stock cards (articles): catalogue number, description, barcode, PLU, weight. Read-only.",
+    listParams(),
+    READ,
+    async (args) =>
+      listTool(m3, "articles", ARTICLE_FIELDS, "Stock Cards", args, (c) =>
+        [
+          `## ${str(c.description)} [${str(c.catalogue)}] (id ${str(c.id)})`,
+          `- Barcode: ${str(c.barCode)} | PLU: ${str(c.plu)} | Weight: ${str(c.weight)} | Type: ${str(c.articleItemType)}`,
+        ].join("\n"),
+      ),
   );
 
   server.tool(
     "m3_stock_lists",
-    "Query warehouses and price levels (read-only)",
+    "List warehouses and price levels. Read-only.",
     {},
+    READ,
     async () => {
       try {
-        const whGql = `{ warehouses(take: 100) { items { id shortCut name } totalCount } }`;
-        const plGql = `{ priceLevels(take: 100) { items { id shortCut name } totalCount } }`;
-        const [whData, plData] = await Promise.all([
-          m3.query<{ warehouses: { items: Record<string, unknown>[]; totalCount: number } }>(whGql),
-          m3.query<{ priceLevels: { items: Record<string, unknown>[]; totalCount: number } }>(plGql),
+        const [wh, pl] = await Promise.all([
+          m3.query<{ warehouses: { items: Record<string, unknown>[] } }>(`{ warehouses(take: 100) { items { id code name } totalCount } }`),
+          m3.query<{ priceLevels: { items: Record<string, unknown>[] } }>(`{ priceLevels(take: 100) { items { id shortCut name } totalCount } }`),
         ]);
         const lines = ["# Stock Lists", "", "## Warehouses"];
-        for (const w of whData.warehouses?.items ?? []) {
-          lines.push(`- ${w.name ?? "—"} (shortCut: ${w.shortCut ?? "—"}, id: ${w.id ?? "?"})`);
-        }
+        for (const w of wh.warehouses?.items ?? []) lines.push(`- ${str(w.name)} (code: ${str(w.code)}, id: ${str(w.id, "?")})`);
         lines.push("", "## Price Levels");
-        for (const p of plData.priceLevels?.items ?? []) {
-          lines.push(`- ${p.name ?? "—"} (shortCut: ${p.shortCut ?? "—"}, id: ${p.id ?? "?"})`);
-        }
+        for (const p of pl.priceLevels?.items ?? []) lines.push(`- ${str(p.name)} (shortCut: ${str(p.shortCut)}, id: ${str(p.id, "?")})`);
         return textResult(lines.join("\n"));
       } catch (err) {
         return errorResult((err as Error).message);
@@ -72,205 +63,146 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
 
   server.tool(
     "m3_stock_documents",
-    "Query stock/warehouse documents with controlling variables, partner details, and line items",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ receivedSlips(${buildArgs(take, skip, where, order)}) {
-        items {
-          id documentNumber dateOfIssue
-          totalWithVatHc
-          partnerAddress {
-            businessAddress { name street municipality postalCode country }
-            identificationNumber
-          }
-          centre { shortCut name }
-          jobOrder { shortCut name }
-          operation { shortCut name }
-          items { description amount unitPriceHc vatRate }
-          description
-        }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ receivedSlips: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const sd = data.receivedSlips;
-        if (!sd?.items?.length) return textResult("No stock documents found.");
-
-        const lines = [`# Stock Documents (${sd.items.length} of ${sd.totalCount})`, ""];
-        for (const d of sd.items) {
+    "Query received stock slips (příjemky) with partner and controlling variables. Read-only.",
+    listParams(),
+    READ,
+    async (args) =>
+      listTool(
+        m3,
+        "receivedSlips",
+        `id year isDeleted documentNumber dateOfIssue totalWithVatHc description
+         partnerAddress { businessAddress { name } identificationNumber }
+         centre { shortCut name } jobOrder { shortCut name } operation { shortCut name }`,
+        "Stock Documents",
+        args,
+        (d) => {
           const partner = d.partnerAddress as Record<string, unknown> | undefined;
           const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-          const cc = d.centre as Record<string, unknown> | undefined;
-          const proj = d.jobOrder as Record<string, unknown> | undefined;
-          const act = d.operation as Record<string, unknown> | undefined;
-          const items = d.items as Array<Record<string, unknown>> | undefined;
-
-          lines.push(`## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`);
-          lines.push(`- Partner: ${biz?.name ?? "—"} (ICO: ${partner?.identificationNumber ?? "—"})`);
-          lines.push(`- Total: ${d.totalWithVatHc ?? "?"}`);
-
-          const ctrl = [cc?.shortCut && `CC:${cc.shortCut}`, proj?.shortCut && `Proj:${proj.shortCut}`, act?.shortCut && `Act:${act.shortCut}`].filter(Boolean);
-          if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
-
-          if (items && items.length > 0) {
-            lines.push("- Items:");
-            for (const it of items) {
-              lines.push(`  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0}`);
-            }
-          }
+          const lines = [
+            `## ${str(d.documentNumber)} (${str(d.dateOfIssue)}; id ${str(d.id)}, year ${str(d.year)})`,
+            `- Partner: ${str(biz?.name)} (ICO: ${str(partner?.identificationNumber)})`,
+            `- Total: ${str(d.totalWithVatHc, "?")}`,
+          ];
+          const ctrl = controllingText(d);
+          if (ctrl) lines.push(ctrl);
           if (d.description) lines.push(`- Description: ${d.description}`);
-          lines.push("");
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+          return lines.join("\n");
+        },
+      ),
   );
 
   server.tool(
     "m3_create_stock_card",
-    "Create a new stock/inventory card with optional barcode, weight, warranty, category. Async import queue.",
+    "Create a stock card (article). Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      catalogueNumber: z.string().describe("Catalogue/SKU number"),
-      name: z.string().describe("Product name"),
-      unit: z.string().default("ks").describe("Unit of measure"),
-      sellingPriceHc: z.number().optional().describe("Selling price"),
-      purchasePriceHc: z.number().optional().describe("Purchase price"),
-      ean: z.string().optional().describe("EAN barcode"),
+      catalogue: z.string().min(1).describe("Catalogue number (katalog)"),
+      description: z.string().min(1).describe("Article name (popis zásoby)"),
+      barCode: z.string().optional().describe("Barcode (EAN)"),
+      plu: z.string().optional().describe("PLU"),
       weight: z.number().optional().describe("Weight per unit"),
-      minimumStock: z.number().optional().describe("Minimum stock level"),
-      maximumStock: z.number().optional().describe("Maximum stock level"),
-      warrantyMonths: z.number().int().optional().describe("Warranty period in months"),
-      categoryCode: z.string().optional().describe("Category code"),
-      groupCode: z.string().optional().describe("Group code"),
-      warehouseCode: z.string().optional().describe("Default warehouse code"),
-      definitionShortcut: z.string().default("_zSK").describe("XML transfer definition shortcut"),
+      definitionShortcut: definitionParam("_zSK"),
     },
-    async (params) => {
-      try {
-        const fields = [
-          `shortCut: "${escGql(params.catalogueNumber)}"`,
-          `name: "${escGql(params.name)}"`,
-          `unit: "${escGql(params.unit)}"`,
-        ].filter(Boolean).join(", ");
-
-        const gql = `mutation {
-  createArticle(
-    article: { ${fields} }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{ createArticle: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createArticle;
-        return textResult(`Stock card "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    // Field names from the article examples in mutation_priklady.pdf and query_priklady.pdf.
+    async ({ definitionShortcut, ...article }) =>
+      runMutation(m3, {
+        mutation: "createArticle",
+        arg: "article",
+        label: `Stock card "${article.catalogue}"`,
+        verifyWith: "m3_stock_cards",
+        definitionShortcut,
+        input: article,
+      }),
   );
 
   server.tool(
     "m3_create_stock_document",
-    "Create a stock/warehouse document (receipt or dispatch) with controlling vars. Async import queue.",
+    "Create a received stock slip (příjemka) with stock items. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
+      dateOfIssue: dateParam("Issue date"),
+      dateOfStockMovement: dateParam("Stock movement date").optional(),
       documentNumber: z.string().optional(),
-      partnerName: z.string().optional().describe("Partner company name"),
-      costCenterCode: z.string().optional().describe("Cost center code"),
-      projectCode: z.string().optional().describe("Project code"),
-      activityCode: z.string().optional().describe("Activity code"),
-      warehouseCode: z.string().optional().describe("Warehouse code"),
-      items: z.array(z.object({
-        description: z.string(),
-        amount: z.number().min(0),
-        unitPriceHc: z.number(),
-        serialNumber: z.string().optional(),
-        discount: z.number().min(0).max(100).optional(),
-      })).min(1).describe("Document line items"),
-      definitionShortcut: z.string().default("_SD").describe("XML transfer definition shortcut"),
+      variableSymbol: z.string().optional(),
+      partner: partnerSchema.optional(),
+      ...controllingParams,
+      items: z
+        .array(
+          z.object({
+            catalogue: z.string().min(1).describe("Article catalogue number"),
+            warehouseCode: z.string().min(1).describe("Warehouse code (see m3_stock_lists)"),
+            quantity: z.number().min(0).describe("Quantity"),
+            unitPrice: z.number().describe("Unit price"),
+          }),
+        )
+        .min(1),
+      // Default from the official stock slip example (mutation_priklady.pdf).
+      definitionShortcut: definitionParam("_S"),
     },
-    async (params) => {
-      try {
-        const itemsGql = params.items.map((it) => {
-          const parts = [
-            `description: "${escGql(it.description)}"`,
-            `amount: ${it.amount}`,
-            `unitPriceHc: ${it.unitPriceHc}`,
-            it.serialNumber ? `serialNumber: "${escGql(it.serialNumber)}"` : "",
-            it.discount ? `discount: ${it.discount}` : "",
-          ].filter(Boolean);
-          return `{ ${parts.join(", ")} }`;
-        }).join(", ");
-
-        const extras = [
-          params.partnerName ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" } }` : "",
-          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.costCenterCode ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }` : "",
-          params.projectCode ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }` : "",
-          params.activityCode ? `operation: { shortCut: "${escGql(params.activityCode)}" }` : "",
-          params.warehouseCode ? `warehouse: { shortCut: "${escGql(params.warehouseCode)}" }` : "",
-        ].filter(Boolean).join("\n      ");
-
-        const gql = `mutation {
-  createReceivedSlip(
-    receivedSlip: {
-      dateOfIssue: "${escGql(params.dateOfIssue)}"
-      ${extras}
-      items: [${itemsGql}]
-    }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{ createReceivedSlip: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createReceivedSlip;
-        return textResult(`Stock document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createReceivedSlip",
+        arg: "receivedSlip",
+        label: "Stock document",
+        verifyWith: "m3_stock_documents",
+        definitionShortcut: p.definitionShortcut,
+        input: {
+          dateOfIssue: isoDate(p.dateOfIssue),
+          dateOfStockMovement: isoDate(p.dateOfStockMovement),
+          documentNumber: p.documentNumber,
+          variableSymbol: p.variableSymbol,
+          partnerAddress: partnerInput(p.partner),
+          ...controllingInput(p),
+          // The official example sends the quantity as unitOfMeasure ("počet kusů").
+          items: p.items.map((it) => ({
+            article: { catalogue: it.catalogue },
+            warehouse: { code: it.warehouseCode },
+            unitOfMeasure: it.quantity,
+            unitPrice: it.unitPrice,
+          })),
+        },
+      }),
   );
 
   server.tool(
     "m3_create_inventory_document",
-    "Create an inventory/stocktaking document. Async import queue.",
+    "Create a stocktaking document (inventurní doklad) with counted amounts. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      dateOfIssue: z.string().regex(DATE_RE, DATE_MSG).describe("Date (DD.MM.YYYY)"),
-      documentNumber: z.string().optional(),
-      warehouseCode: z.string().optional().describe("Warehouse code"),
-      definitionShortcut: z.string().default("_INV").describe("XML transfer definition shortcut"),
+      description: z.string().optional(),
+      note: z.string().optional(),
+      stockTakingId: z.number().int().positive().optional().describe("ID of the stocktaking (inventura) to attach to"),
+      checkedByEmployee: z.string().optional(),
+      items: z
+        .array(
+          z.object({
+            catalogue: z.string().min(1).describe("Article catalogue number"),
+            warehouseCode: z.string().min(1).describe("Warehouse code (see m3_stock_lists)"),
+            inventoryAmount: z.number().min(0).describe("Counted quantity"),
+          }),
+        )
+        .min(1),
+      // Default from the official stocktaking example (mutation_priklady.pdf).
+      definitionShortcut: definitionParam("_INVD"),
     },
-    async (params) => {
-      try {
-        const extras = [
-          params.documentNumber ? `documentNumber: "${escGql(params.documentNumber)}"` : "",
-          params.warehouseCode ? `warehouse: { shortCut: "${escGql(params.warehouseCode)}" }` : "",
-        ].filter(Boolean).join("\n      ");
-
-        const gql = `mutation {
-  createStockTakingDocument(
-    stockTakingDocument: {
-      dateOfIssue: "${escGql(params.dateOfIssue)}"
-      ${extras}
-    }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{ createStockTakingDocument: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createStockTakingDocument;
-        return textResult(`Inventory document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createStockTakingDocument",
+        arg: "stockTakingDocument",
+        label: "Stocktaking document",
+        verifyWith: "m3_inventory_documents",
+        definitionShortcut: p.definitionShortcut,
+        input: {
+          description: p.description,
+          note: p.note,
+          stockTakingId: p.stockTakingId,
+          checkedByEmployee: p.checkedByEmployee,
+          items: p.items.map((it) => ({
+            article: { catalogue: it.catalogue },
+            inventoryAmount: it.inventoryAmount,
+            warehouse: { code: it.warehouseCode },
+          })),
+        },
+      }),
   );
 }

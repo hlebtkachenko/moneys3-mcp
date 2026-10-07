@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Money S3 GraphQL API schema introspection results",
+    "description": "Hand-written summary of part of the Money S3 GraphQL schema (16 query types, 11 mutation input types, top-level fields only). Not a real introspection result: a full introspection needs a live Money S3 API server.",
     "generatedAt": "2026-03-16",
     "notes": {
       "INumericalSeries": "Type does not exist. Correct type name is INumericalSerie.",

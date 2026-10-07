@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { buildArgs, textResult, errorResult } from "./helpers.js";
+import { READ, buildArgs, textResult, errorResult } from "./helpers.js";
 
 export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -13,6 +13,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ numericalSeries(${buildArgs(take, skip, where, order)}) {
@@ -60,6 +61,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ currencies(${buildArgs(take, skip, where, order)}) {
@@ -91,6 +93,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ vatClassifications(${buildArgs(take, skip, where, order)}) {
@@ -122,6 +125,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ vatPurposes(${buildArgs(take, skip, where, order)}) {
@@ -153,6 +157,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ constantSymbols(${buildArgs(take, skip, where, order)}) {
@@ -184,6 +189,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ countries(${buildArgs(take, skip, where, order)}) {
@@ -215,6 +221,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ flags(${buildArgs(take, skip, where, order)}) {
@@ -246,6 +253,7 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ activities(${buildArgs(take, skip, where, order)}) {

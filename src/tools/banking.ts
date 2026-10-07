@@ -2,357 +2,197 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
 import {
-  escGql,
-  DATE_RE,
-  DATE_MSG,
-  buildArgs,
-  filterDeleted,
-  textResult,
+  CREATE,
+  READ,
+  controllingInput,
+  controllingParams,
+  controllingText,
+  dateParam,
+  definitionParam,
   errorResult,
+  isoDate,
+  listParams,
+  listTool,
+  partnerInput,
+  partnerSchema,
+  runMutation,
+  str,
+  textResult,
+  vatText,
 } from "./helpers.js";
 
-const DOC_FIELDS = `
-  items {
-    id isDeleted documentNumber isExpense dateOfIssue dateOfPayment dateOfAccountingEvent
-    totalWithVatHc totalWithVat
-    bankStatementNumber
-    currency { code }
-    vatRateSummaryHc { vatRate totalWithoutVat totalVat }
-    partnerAddress {
-      address { name street municipality postalCode country }
-      identificationNumber vatIdentificationNumber
-    }
-    variableSymbol constantSymbol specificSymbol pairingSymbol
-    centre { shortCut name }
-    jobOrder { shortCut name }
-    operation { shortCut name }
-    accountAssignment { accountAssignmentAcc { shortCut description } }
-    bankAccount { shortCut description }
-    description note
+// Fields shared by IBankStatement and ICashVoucher (docs/schema-summary.json).
+// partnerAddress { address } was fixed against a live server in 6dca522.
+const PAYMENT_FIELDS = `
+  id year isDeleted documentNumber isExpense dateOfIssue dateOfPayment dateOfAccountingEvent
+  totalWithVatHc totalWithVat currency { code }
+  vatRateSummaryHc { vatRate totalWithoutVat totalVat }
+  partnerAddress {
+    address { name street municipality postalCode country }
+    identificationNumber vatIdentificationNumber
   }
-  totalCount
+  variableSymbol pairingSymbol
+  centre { shortCut name } jobOrder { shortCut name } operation { shortCut name }
+  accountAssignment { accountAssignmentAcc { shortCut description } }
+  description note
 `;
 
-function formatBankDoc(d: Record<string, unknown>): string {
+const BANK_FIELDS = `${PAYMENT_FIELDS}
+  bankStatementNumber constantSymbol specificSymbol
+  bankAccount { shortCut description }
+`;
+
+// ICashVoucher has no bank statement number, constant/specific symbol or bankAccount; it has cashBox.
+const CASH_FIELDS = `${PAYMENT_FIELDS}
+  cashBox { shortCut description }
+`;
+
+function formatPaymentDoc(d: Record<string, unknown>): string {
   const partner = d.partnerAddress as Record<string, unknown> | undefined;
-  const biz = partner?.address as Record<string, unknown> | undefined;
+  const addr = partner?.address as Record<string, unknown> | undefined;
   const cur = d.currency as Record<string, unknown> | undefined;
-  const vatSummary = d.vatRateSummaryHc as
-    | Array<Record<string, unknown>>
-    | undefined;
-  const cc = d.centre as Record<string, unknown> | undefined;
-  const proj = d.jobOrder as Record<string, unknown> | undefined;
-  const act = d.operation as Record<string, unknown> | undefined;
-  const aa = d.accountAssignment as Record<string, unknown> | undefined;
-  const aaAcc = aa?.accountAssignmentAcc as Record<string, unknown> | undefined;
-  const ba = d.bankAccount as Record<string, unknown> | undefined;
+  const aa = (d.accountAssignment as Record<string, unknown> | undefined)?.accountAssignmentAcc as Record<string, unknown> | undefined;
+  const box = (d.bankAccount ?? d.cashBox) as Record<string, unknown> | undefined;
 
-  const type = d.isExpense ? "Expense" : "Receipt";
   const lines = [
-    `## ${d.documentNumber ?? "—"} [${type}] (${d.dateOfPayment ?? d.dateOfIssue ?? "—"})`,
-    `- Partner: ${biz?.name ?? "—"} (ICO: ${partner?.identificationNumber ?? "—"})`,
-    `- VS: ${d.variableSymbol ?? "—"} | KS: ${d.constantSymbol ?? "—"} | SS: ${d.specificSymbol ?? "—"}`,
-    `- Total: ${d.totalWithVatHc ?? "?"} ${cur?.code ?? "CZK"}`,
-    `- Bank account: ${ba?.shortCut ?? "—"} (${ba?.description ?? "—"})`,
+    `## ${str(d.documentNumber)} [${d.isExpense ? "Expense" : "Receipt"}] (${str(d.dateOfPayment ?? d.dateOfIssue)}; id ${str(d.id)}, year ${str(d.year)})`,
+    `- Partner: ${str(addr?.name)} (ICO: ${str(partner?.identificationNumber)})`,
+    `- VS: ${str(d.variableSymbol)}${"constantSymbol" in d ? ` | KS: ${str(d.constantSymbol)} | SS: ${str(d.specificSymbol)}` : ""}`,
+    `- Total: ${str(d.totalWithVatHc, "?")} ${str(cur?.code, "CZK")}`,
+    `- ${d.bankAccount ? "Bank account" : "Cash box"}: ${str(box?.shortCut)} (${str(box?.description)})`,
   ];
-
-  if (vatSummary && vatSummary.length > 0) {
-    const vatParts = vatSummary.map(
-      (v) => `${v.vatRate}%: base ${v.totalWithoutVat}, VAT ${v.totalVat}`,
-    );
-    lines.push(`- VAT: ${vatParts.join(" | ")}`);
-  }
-
-  const ctrl = [
-    cc?.shortCut && `CC:${cc.shortCut}`,
-    proj?.shortCut && `Proj:${proj.shortCut}`,
-    act?.shortCut && `Act:${act.shortCut}`,
-  ].filter(Boolean);
-  if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
-  if (aaAcc?.shortCut)
-    lines.push(`- Predkontace: ${aaAcc.shortCut} (${aaAcc.description ?? ""})`);
+  if (d.bankStatementNumber) lines.push(`- Statement no.: ${d.bankStatementNumber}`);
+  for (const line of [vatText(d), controllingText(d)]) if (line) lines.push(line);
+  if (aa?.shortCut) lines.push(`- Predkontace: ${aa.shortCut} (${str(aa.description, "")})`);
   if (d.description) lines.push(`- Description: ${d.description}`);
   if (d.note) lines.push(`- Note: ${d.note}`);
   return lines.join("\n");
 }
 
+const paymentParams = {
+  dateOfIssue: dateParam("Issue date"),
+  dateOfAccountingEvent: dateParam("Accounting event date").optional(),
+  dateOfPayment: dateParam("Payment date").optional(),
+  documentNumber: z.string().optional(),
+  isExpense: z.boolean().optional().describe("True for expense (výdej), false for receipt (příjem)"),
+  variableSymbol: z.string().optional(),
+  partner: partnerSchema.optional(),
+  ...controllingParams,
+  description: z.string().optional().describe("Description"),
+};
+
+type PaymentParams = {
+  dateOfIssue: string;
+  dateOfAccountingEvent?: string;
+  dateOfPayment?: string;
+  documentNumber?: string;
+  isExpense?: boolean;
+  variableSymbol?: string;
+  partner?: z.infer<typeof partnerSchema>;
+  costCenterCode?: string;
+  projectCode?: string;
+  activityCode?: string;
+  description?: string;
+};
+
+function paymentInput(p: PaymentParams) {
+  return {
+    dateOfIssue: isoDate(p.dateOfIssue),
+    dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
+    dateOfPayment: isoDate(p.dateOfPayment),
+    documentNumber: p.documentNumber,
+    isExpense: p.isExpense,
+    variableSymbol: p.variableSymbol,
+    description: p.description,
+    partnerAddress: partnerInput(p.partner),
+    ...controllingInput(p),
+  };
+}
+
 export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_bank_documents",
-    "Query bank documents (payments, transfers) with VAT breakdown, payment status, controlling variables",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ bankStatements(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{
-          bankStatements: {
-            items: Record<string, unknown>[];
-            totalCount: number;
-          };
-        }>(gql);
-        const bd = data.bankStatements;
-        const items = filterDeleted(bd?.items ?? []);
-        if (!items.length) return textResult("No bank documents found.");
-        const header = `# Bank Documents (${items.length} of ${bd.totalCount})\n`;
-        return textResult(header + items.map(formatBankDoc).join("\n\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query bank documents (bankovní doklady) with VAT summary, statement number and controlling variables. Read-only.",
+    listParams(),
+    READ,
+    async (args) => listTool(m3, "bankStatements", BANK_FIELDS, "Bank Documents", args, formatPaymentDoc),
   );
 
   server.tool(
     "m3_cash_desk_documents",
-    "Query cash desk (register) documents with VAT breakdown, payment status, controlling variables",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ cashVouchers(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{
-          cashVouchers: {
-            items: Record<string, unknown>[];
-            totalCount: number;
-          };
-        }>(gql);
-        const cd = data.cashVouchers;
-        const items = filterDeleted(cd?.items ?? []);
-        if (!items.length) return textResult("No cash desk documents found.");
-        const header = `# Cash Desk Documents (${items.length} of ${cd.totalCount})\n`;
-        return textResult(header + items.map(formatBankDoc).join("\n\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query cash desk documents (pokladní doklady) with VAT summary, cash box and controlling variables. Read-only.",
+    listParams(),
+    READ,
+    async (args) => listTool(m3, "cashVouchers", CASH_FIELDS, "Cash Desk Documents", args, formatPaymentDoc),
   );
 
   server.tool(
     "m3_create_bank_document",
-    "Create a bank document (payment). Supports controlling variables. Async import queue.",
+    "Create a bank document. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      dateOfIssue: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .describe("Date (DD.MM.YYYY)"),
-      dateOfAccountingEvent: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .optional()
-        .describe("Accounting event date (DD.MM.YYYY)"),
-      documentNumber: z.string().optional(),
-      isExpense: z
-        .boolean()
-        .optional()
-        .describe("True for expense, false for income"),
-      variableSymbol: z.string().optional(),
+      ...paymentParams,
       constantSymbol: z.string().optional(),
       specificSymbol: z.string().optional(),
-      partnerName: z.string().optional().describe("Partner company name"),
-      partnerIco: z.string().optional().describe("Partner ICO"),
-      costCenterCode: z
-        .string()
-        .optional()
-        .describe("Cost center shortcut (středisko)"),
-      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z
-        .string()
-        .optional()
-        .describe("Activity shortcut (činnost)"),
-      description: z.string().optional().describe("Description/note"),
-      definitionShortcut: z
-        .string()
-        .default("_BD")
-        .describe("XML transfer definition shortcut"),
+      bankStatementNumber: z.number().int().positive().optional(),
+      bankAccountCode: z.string().optional().describe("Bank account shortcut (see m3_bank_accounts)"),
+      definitionShortcut: definitionParam("_BD"),
     },
-    async (params) => {
-      try {
-        const fields = [
-          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-          params.dateOfAccountingEvent
-            ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`
-            : "",
-          params.documentNumber
-            ? `documentNumber: "${escGql(params.documentNumber)}"`
-            : "",
-          params.isExpense != null ? `isExpense: ${params.isExpense}` : "",
-          params.variableSymbol
-            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
-            : "",
-          params.constantSymbol
-            ? `constantSymbol: "${escGql(params.constantSymbol)}"`
-            : "",
-          params.specificSymbol
-            ? `specificSymbol: "${escGql(params.specificSymbol)}"`
-            : "",
-          params.description
-            ? `description: "${escGql(params.description)}"`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(", ");
-
-        const extras = [
-          params.partnerName
-            ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }`
-            : "",
-          params.costCenterCode
-            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
-            : "",
-          params.projectCode
-            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
-            : "",
-          params.activityCode
-            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n      ");
-
-        const gql = `mutation {
-  createBankStatement(
-    bankStatement: { ${fields} ${extras} }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{
-          createBankStatement: { guid: string; isSuccess: boolean };
-        }>(gql, true);
-        const result = data.createBankStatement;
-        return textResult(
-          `Bank document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
-        );
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createBankStatement",
+        arg: "bankStatement",
+        label: "Bank document",
+        verifyWith: "m3_bank_documents",
+        definitionShortcut: p.definitionShortcut,
+        input: {
+          ...paymentInput(p),
+          constantSymbol: p.constantSymbol,
+          specificSymbol: p.specificSymbol,
+          bankStatementNumber: p.bankStatementNumber,
+          bankAccount: p.bankAccountCode ? { shortCut: p.bankAccountCode } : undefined,
+        },
+      }),
   );
 
   server.tool(
     "m3_create_cash_desk_document",
-    "Create a cash desk (register) document. Supports controlling variables. Async import queue.",
+    "Create a cash desk document. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      dateOfIssue: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .describe("Date (DD.MM.YYYY)"),
-      dateOfAccountingEvent: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .optional()
-        .describe("Accounting event date (DD.MM.YYYY)"),
-      documentNumber: z.string().optional(),
-      isExpense: z
-        .boolean()
-        .optional()
-        .describe("True for expense, false for income"),
-      variableSymbol: z.string().optional(),
-      costCenterCode: z.string().optional().describe("Cost center shortcut"),
-      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z
-        .string()
-        .optional()
-        .describe("Activity shortcut (činnost)"),
-      description: z.string().optional().describe("Description/note"),
-      definitionShortcut: z
-        .string()
-        .default("_PPD")
-        .describe("XML transfer definition shortcut"),
+      ...paymentParams,
+      cashBoxCode: z.string().optional().describe("Cash box shortcut (see m3_bank_accounts)"),
+      // Default from the official cash voucher example (mutation_priklady.pdf).
+      definitionShortcut: definitionParam("_PD"),
     },
-    async (params) => {
-      try {
-        const fields = [
-          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-          params.dateOfAccountingEvent
-            ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`
-            : "",
-          params.documentNumber
-            ? `documentNumber: "${escGql(params.documentNumber)}"`
-            : "",
-          params.isExpense != null ? `isExpense: ${params.isExpense}` : "",
-          params.variableSymbol
-            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
-            : "",
-          params.description
-            ? `description: "${escGql(params.description)}"`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(", ");
-
-        const extras = [
-          params.costCenterCode
-            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
-            : "",
-          params.projectCode
-            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
-            : "",
-          params.activityCode
-            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n      ");
-
-        const gql = `mutation {
-  createCashVoucher(
-    cashVoucher: { ${fields} ${extras} }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{
-          createCashVoucher: { guid: string; isSuccess: boolean };
-        }>(gql, true);
-        const result = data.createCashVoucher;
-        return textResult(
-          `Cash desk document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
-        );
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createCashVoucher",
+        arg: "cashVoucher",
+        label: "Cash desk document",
+        verifyWith: "m3_cash_desk_documents",
+        definitionShortcut: p.definitionShortcut,
+        input: { ...paymentInput(p), cashBox: p.cashBoxCode ? { shortCut: p.cashBoxCode } : undefined },
+      }),
   );
 
   server.tool(
     "m3_bank_accounts",
-    "List bank accounts and cash desks configured in Money S3 (read-only)",
+    "List bank accounts and cash boxes configured in Money S3. Read-only.",
     {},
+    READ,
     async () => {
       try {
-        const gql = `{ bankAccountCashBoxes(take: 100) {
-        items { shortCut description type accountNumber bankName currency { code } }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{
-          bankAccountCashBoxes: {
-            items: Record<string, unknown>[];
-            totalCount: number;
-          };
-        }>(gql);
-
-        const ba = data.bankAccountCashBoxes;
-        const lines = ["# Bank Accounts & Cash Desks"];
-        if (!ba?.items?.length) {
-          lines.push("", "No bank accounts or cash desks found.");
-        } else {
-          lines.push("");
-          for (const a of ba.items) {
-            const cur = a.currency as Record<string, unknown> | undefined;
-            lines.push(
-              `- **${a.description ?? "—"}** [${a.shortCut ?? "—"}] type: ${a.type ?? "?"} acct: ${a.accountNumber ?? "—"} bank: ${a.bankName ?? "—"} (${cur?.code ?? "CZK"})`,
-            );
-          }
+        const gql = `{ bankAccountCashBoxes(take: 100) { items { shortCut description type accountNumber bankName iban currency { code } } totalCount } }`;
+        const data = await m3.query<{ bankAccountCashBoxes: { items: Record<string, unknown>[] } }>(gql);
+        const items = data.bankAccountCashBoxes?.items ?? [];
+        const lines = ["# Bank Accounts & Cash Boxes", ""];
+        if (!items.length) lines.push("None found.");
+        for (const a of items) {
+          const cur = a.currency as Record<string, unknown> | undefined;
+          lines.push(
+            `- **${str(a.description)}** [${str(a.shortCut)}] type: ${str(a.type, "?")} acct: ${str(a.accountNumber)} IBAN: ${str(a.iban)} bank: ${str(a.bankName)} (${str(cur?.code, "CZK")})`,
+          );
         }
         return textResult(lines.join("\n"));
       } catch (err) {

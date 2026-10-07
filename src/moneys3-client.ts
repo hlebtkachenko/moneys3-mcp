@@ -1,3 +1,4 @@
+import { OperationTypeNode, parse } from "graphql";
 import { ResponseCache } from "./cache.js";
 
 const TIMEOUT_MS = 30_000;
@@ -8,7 +9,7 @@ const RECOVERY_HINTS: Record<number, string> = {
   401: "Token expired or credentials invalid. Verify MONEYS3_CLIENT_ID and MONEYS3_CLIENT_SECRET.",
   403: "The API key user lacks permissions for this area. Check user rights on the API Key in Money S3.",
   404: "The Money S3 API service is not reachable. Verify MONEYS3_DOMAIN and that the API service is running.",
-  429: "Rate limit exceeded. The request will be retried automatically.",
+  429: "Rate limit exceeded and retries are used up. Wait and try again.",
   500: "Money S3 API internal error. Try restarting the S3Api service via Task Manager.",
   502: "Gateway error — the Money S3 API service may be down. Verify the S3Api Windows service is running.",
   503: "Service unavailable. The Money S3 API service may be restarting or overloaded.",
@@ -22,6 +23,9 @@ export interface MoneyS3Config {
   agendaGuid?: string;
   cacheTtl?: number;
   maxRetries?: number;
+  /** Overrides https://{domain}.api.moneys3.eu (used by tests). */
+  baseUrl?: string;
+  timeoutMs?: number;
 }
 
 interface TokenResponse {
@@ -38,17 +42,65 @@ interface GraphQLResponse<T = unknown> {
   }>;
 }
 
+// Reads of these collections skip the cache: changes made outside this server
+// (e.g. deletes in the Money S3 GUI) would not invalidate it.
+const MUTABLE_COLLECTIONS = [
+  "bankStatements",
+  "cashVouchers",
+  "receivedInvoices",
+  "issuedInvoices",
+  "internalDocuments",
+  "liabilities",
+  "receivables",
+  "journalAccs",
+  "journalTrs",
+  "receivedOrders",
+  "issuedOrders",
+  "receivedOffers",
+  "issuedOffers",
+  "receivedInquiries",
+  "issuedInquiries",
+  "receivedSlips",
+  "issuedSlips",
+  "saleSlips",
+  "transferNotes",
+  "productionNotes",
+  "receivedDeliveryNotes",
+  "issuedDeliveryNotes",
+  "stockTakingDocuments",
+  "warehouseStocks",
+  "importStatus",
+];
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Classifies a GraphQL document by parsing it; any mutation operation makes it a mutation. */
+export function operationKind(gql: string): "query" | "mutation" {
+  let doc;
+  try {
+    doc = parse(gql);
+  } catch (err) {
+    throw new Error(`GraphQL syntax error: ${(err as Error).message}`);
+  }
+  let kind: "query" | "mutation" = "query";
+  for (const def of doc.definitions) {
+    if (def.kind !== "OperationDefinition") continue;
+    if (def.operation === OperationTypeNode.SUBSCRIPTION) throw new Error("Subscriptions are not supported.");
+    if (def.operation === OperationTypeNode.MUTATION) kind = "mutation";
+  }
+  return kind;
+}
+
 export class MoneyS3Client {
-  private domain: string;
   private appId: string;
   private clientId: string;
   private clientSecret: string;
   private agendaGuid: string | undefined;
   private maxRetries: number;
+  private timeoutMs: number;
+  private base: string;
 
   private accessToken: string | null = null;
   private tokenExpiresAt = 0;
@@ -56,23 +108,14 @@ export class MoneyS3Client {
   readonly cache: ResponseCache;
 
   constructor(config: MoneyS3Config) {
-    this.domain = config.domain;
+    this.base = config.baseUrl ?? `https://${config.domain}.api.moneys3.eu`;
     this.appId = config.appId;
     this.clientId = config.clientId;
     this.clientSecret = config.clientSecret;
     this.agendaGuid = config.agendaGuid;
     this.maxRetries = config.maxRetries ?? 3;
+    this.timeoutMs = config.timeoutMs ?? TIMEOUT_MS;
     this.cache = new ResponseCache(config.cacheTtl ?? 120);
-
-    if (this.agendaGuid) {
-      process.stderr.write(
-        `[moneys3] Agenda GUID from env: ${this.agendaGuid}\n`,
-      );
-    } else {
-      process.stderr.write(
-        `[moneys3] No MONEYS3_AGENDA_GUID env var — agenda must be set via m3_set_agenda\n`,
-      );
-    }
   }
 
   getAgendaGuid(): string | undefined {
@@ -80,7 +123,7 @@ export class MoneyS3Client {
   }
 
   get baseUrl(): string {
-    return `https://${this.domain}.api.moneys3.eu`;
+    return this.base;
   }
 
   get graphqlUrl(): string {
@@ -114,7 +157,7 @@ export class MoneyS3Client {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
@@ -131,153 +174,111 @@ export class MoneyS3Client {
     return this.accessToken;
   }
 
-  async query<T = unknown>(gql: string, isMutation = false): Promise<T> {
-    const cacheKey = `GQL:${gql}`;
-    // Bypass cache for mutable document collections (mutations from outside MCP
-    // — e.g. M3 GUI deletes — won't invalidate our cache, so reads of these
-    // queries must always go to the server).
-    const mutableCollections = [
-      "bankStatements",
-      "cashVouchers",
-      "receivedInvoices",
-      "issuedInvoices",
-      "internalDocuments",
-      "liabilities",
-      "receivables",
-      "journalAccs",
-      "journalTrs",
-      "receivedOrders",
-      "issuedOrders",
-      "receivedOffers",
-      "issuedOffers",
-      "receivedInquiries",
-      "issuedInquiries",
-      "receivedSlips",
-      "issuedSlips",
-      "saleSlips",
-      "transferNotes",
-      "productionNotes",
-      "receivedDeliveryNotes",
-      "issuedDeliveryNotes",
-      "stockTakingDocuments",
-      "warehouseStocks",
-      "importStatus",
-    ];
-    const skipCache = mutableCollections.some((name) =>
-      new RegExp(`\\b${name}\\b`).test(gql),
-    );
-    if (!isMutation && !skipCache && this.cache.enabled) {
+  /** Read-only GraphQL: cached, retried on timeout. Rejects documents that contain a mutation. */
+  async query<T = unknown>(gql: string): Promise<T> {
+    if (operationKind(gql) !== "query") throw new Error("Read tools may not send mutations.");
+    return this.send<T>(gql, false, "");
+  }
+
+  /** GraphQL mutation: never cached, never resent after it may have reached the server. */
+  async mutate<T = unknown>(gql: string, verifyWith: string): Promise<T> {
+    if (operationKind(gql) !== "mutation") throw new Error("Expected a GraphQL mutation.");
+    return this.send<T>(gql, true, verifyWith);
+  }
+
+  /** Raw document from m3_graphql: the operation type is detected by parsing it. */
+  async raw<T = unknown>(gql: string): Promise<T> {
+    return this.send<T>(gql, operationKind(gql) === "mutation", "the matching read tool");
+  }
+
+  private async send<T>(gql: string, isMutation: boolean, verifyWith: string): Promise<T> {
+    const cacheKey = `GQL:${this.agendaGuid ?? ""}:${gql}`;
+    const skipCache = MUTABLE_COLLECTIONS.some((name) => new RegExp(`\\b${name}\\b`).test(gql));
+    const useCache = !isMutation && !skipCache && this.cache.enabled;
+    if (useCache) {
       const cached = this.cache.get<T>(cacheKey);
       if (cached !== undefined) return cached;
     }
+    const res = await this.post(gql, isMutation, verifyWith);
+    if (isMutation) this.cache.invalidate();
+    const data = parseResponse<T>(res.status, await res.text(), isMutation, verifyWith);
+    if (useCache) this.cache.set(cacheKey, data);
+    return data;
+  }
 
-    let lastError: Error | null = null;
+  private headers(token: string, gql: string): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+    if (this.agendaGuid) headers["AgendaId"] = this.agendaGuid;
+    else if (!gql.includes("agendas")) {
+      throw new Error("No agenda selected. Call m3_connection_test (auto-selects if only one) or m3_set_agenda first.");
+    }
+    return headers;
+  }
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+  /** POSTs the document, retrying only where the request was certainly not processed (or is a read). */
+  private async post(gql: string, isMutation: boolean, verifyWith: string): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      const headers = this.headers(await this.fetchToken(), gql);
+      const canRetry = attempt < this.maxRetries;
+      let res: Response;
       try {
-        const token = await this.fetchToken();
-
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        };
-        if (this.agendaGuid) {
-          headers["AgendaId"] = this.agendaGuid;
-        } else if (!gql.includes("agendas")) {
-          throw new Error(
-            "No agenda selected. Call m3_connection_test (auto-selects if only one) or m3_set_agenda first.",
-          );
-        }
-
-        const res = await fetch(this.graphqlUrl, {
+        res = await fetch(this.graphqlUrl, {
           method: "POST",
           headers,
           body: JSON.stringify({ query: gql }),
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: AbortSignal.timeout(this.timeoutMs),
         });
-
-        if (res.status === 401 && attempt < this.maxRetries) {
-          this.accessToken = null;
-          this.tokenExpiresAt = 0;
-          await sleep(500);
-          continue;
-        }
-
-        if (res.status === 429) {
-          const retryAfter = res.headers.get("retry-after");
-          const waitMs = retryAfter
-            ? parseInt(retryAfter, 10) * 1000
-            : Math.min(1000 * 2 ** attempt, 30_000);
-          if (attempt < this.maxRetries) {
-            await sleep(waitMs);
-            continue;
-          }
-        }
-
-        const text = await res.text();
-
-        if (!res.ok) {
-          let detail = text.slice(0, 500);
-          try {
-            const err = JSON.parse(text) as {
-              error?: string;
-              message?: string;
-            };
-            detail = (err.error || err.message || text).slice(0, 500);
-          } catch {
-            /* raw text */
-          }
-
-          const hint = RECOVERY_HINTS[res.status] || "";
-          const hintSuffix = hint ? `\nRecovery: ${hint}` : "";
-          throw new Error(
-            `Money S3 GraphQL ${res.status}: ${detail}${hintSuffix}`,
-          );
-        }
-
-        let parsed: GraphQLResponse<T>;
-        try {
-          parsed = JSON.parse(text) as GraphQLResponse<T>;
-        } catch {
-          throw new Error(
-            `Money S3 returned invalid JSON: ${text.slice(0, 300)}`,
-          );
-        }
-
-        if (parsed.errors && parsed.errors.length > 0) {
-          const msgs = parsed.errors.map((e) => e.message).join("; ");
-          throw new Error(`GraphQL error: ${msgs.slice(0, 500)}`);
-        }
-
-        if (!parsed.data) {
-          throw new Error("GraphQL response contained no data.");
-        }
-
-        if (!isMutation && !skipCache && this.cache.enabled) {
-          this.cache.set(cacheKey, parsed.data);
-        } else if (isMutation) {
-          this.cache.invalidate();
-        }
-
-        return parsed.data;
       } catch (err) {
-        lastError = err as Error;
-        if (
-          (err as Error).name === "TimeoutError" &&
-          attempt < this.maxRetries
-        ) {
-          await sleep(1000 * 2 ** attempt);
-          continue;
+        if (isMutation) {
+          // The request may have reached Money S3 and been queued: never resend it.
+          this.cache.invalidate();
+          throw new Error(
+            `Outcome unknown: the mutation request failed in transit (${(err as Error).message}). ` +
+              `It may or may not have been queued. Verify with m3_import_status or ${verifyWith} before retrying.`,
+          );
         }
-        if (attempt >= this.maxRetries) break;
-        const msg = (err as Error).message || "";
-        if (msg.includes("429") || msg.includes("401")) continue;
-        break;
+        if ((err as Error).name !== "TimeoutError" || !canRetry) throw err;
+        await sleep(1000 * 2 ** attempt);
+        continue;
+      }
+      // 401 and 429 mean the request was not processed, so a retry is safe for mutations too.
+      if (res.status === 401 && canRetry) {
+        this.accessToken = null;
+        this.tokenExpiresAt = 0;
+        await sleep(500);
+      } else if (res.status === 429 && canRetry) {
+        const retryAfter = parseInt(res.headers.get("retry-after") ?? "", 10);
+        await sleep(Number.isNaN(retryAfter) ? Math.min(1000 * 2 ** attempt, 30_000) : retryAfter * 1000);
+      } else {
+        return res;
       }
     }
-
-    throw (
-      lastError ?? new Error("Money S3 GraphQL request failed after retries")
-    );
   }
+}
+
+function parseResponse<T>(status: number, text: string, isMutation: boolean, verifyWith: string): T {
+  if (status < 200 || status >= 300) {
+    let detail = text.slice(0, 500);
+    try {
+      const err = JSON.parse(text) as { error?: string; message?: string };
+      detail = (err.error || err.message || text).slice(0, 500);
+    } catch {
+      /* raw text */
+    }
+    const hint = RECOVERY_HINTS[status];
+    const unknown =
+      isMutation && status >= 500 ? `\nOutcome unknown: verify with m3_import_status or ${verifyWith} before retrying.` : "";
+    throw new Error(`Money S3 GraphQL ${status}: ${detail}${hint ? `\nRecovery: ${hint}` : ""}${unknown}`);
+  }
+  let parsed: GraphQLResponse<T>;
+  try {
+    parsed = JSON.parse(text) as GraphQLResponse<T>;
+  } catch {
+    throw new Error(`Money S3 returned invalid JSON: ${text.slice(0, 300)}`);
+  }
+  if (parsed.errors?.length) {
+    throw new Error(`GraphQL error: ${parsed.errors.map((e) => e.message).join("; ").slice(0, 500)}`);
+  }
+  if (!parsed.data) throw new Error("GraphQL response contained no data.");
+  return parsed.data;
 }

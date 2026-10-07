@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { textResult, errorResult } from "./helpers.js";
+import { READ, textResult, errorResult } from "./helpers.js";
 
 interface AgendaItem {
   guid: string;
@@ -18,6 +18,7 @@ export function registerAgendaTools(server: McpServer, m3: MoneyS3Client) {
     "m3_agendas",
     "List all agendas (companies/databases) in this Money S3 instance with their GUIDs. Use the GUID to select which agenda to work with via m3_set_agenda.",
     {},
+    READ,
     async () => {
       try {
         const gql = `{ agendas { items { guid name identificationNumber } } }`;
@@ -52,6 +53,7 @@ export function registerAgendaTools(server: McpServer, m3: MoneyS3Client) {
     {
       guid: z.string().min(36).max(36).describe("Agenda GUID from m3_agendas"),
     },
+    READ,
     async ({ guid }) => {
       if (!/^[0-9a-f-]{36}$/i.test(guid)) {
         return errorResult(

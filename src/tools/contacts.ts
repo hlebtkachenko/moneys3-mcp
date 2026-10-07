@@ -1,10 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { escGql, buildArgs, textResult, errorResult } from "./helpers.js";
+import { CREATE, DELETE, READ, addressInput, definitionParam, listParams, listTool, runMutation } from "./helpers.js";
 
 const ADDRESS_FIELDS = `
-  items {
     id guid code
     identificationNumber vatIdentificationNumber
     isPerson isVatPayer
@@ -17,8 +16,6 @@ const ADDRESS_FIELDS = `
     deliveryAddress { name street municipality countryName }
     addressGroup { name }
     bankAccounts { bankName accountNumber bankCode }
-  }
-  totalCount
 `;
 
 function formatContact(c: Record<string, unknown>): string {
@@ -63,37 +60,22 @@ function formatContact(c: Record<string, unknown>): string {
 export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_address_book",
-    "Query the address book (contacts/partners) with full detail: addresses, bank accounts, credit limits, discount, maturity terms",
-    {
-      take: z.number().min(1).max(100).default(20).describe("Number of records"),
-      skip: z.number().min(0).default(0).describe("Records to skip"),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ companies(${buildArgs(take, skip, where, order)}) { ${ADDRESS_FIELDS} } }`;
-        const data = await m3.query<{ companies: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const ab = data.companies;
-        if (!ab?.items?.length) return textResult("No contacts found.");
-        const header = `# Address Book (${ab.items.length} of ${ab.totalCount})\n`;
-        return textResult(header + ab.items.map(formatContact).join("\n\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query the address book (contacts/partners) with addresses, bank accounts, credit limits, discount and maturity terms. Read-only.",
+    listParams(),
+    READ,
+    async (args) => listTool(m3, "companies", ADDRESS_FIELDS, "Address Book", args, formatContact),
   );
 
   server.tool(
     "m3_create_address",
-    "Create a new entry in the address book with business/invoice addresses, banking, credit limits, and maturity terms. Async import queue.",
+    "Create an address book entry with business address, banking, credit limit and maturity terms. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
       name: z.string().min(1).describe("Company or person name"),
       street: z.string().optional(),
       city: z.string().optional(),
-      zip: z.string().optional(),
-      country: z.string().optional(),
-      countryCode: z.string().optional().describe("ISO country code (CZ, SK, etc.)"),
+      zip: z.string().optional().describe("Postal code"),
+      country: z.string().optional().describe("Country name"),
+      countryCode: z.string().regex(/^[A-Z]{2}$/, "Two-letter ISO code").optional().describe("ISO country code (CZ, SK, ...)"),
       identificationNumber: z.string().optional().describe("ICO / Company ID"),
       vatNumber: z.string().optional().describe("VAT number (DIC)"),
       isVatPayer: z.boolean().optional().describe("Whether partner is VAT payer"),
@@ -104,75 +86,57 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
       web: z.string().optional(),
       bankAccountNumber: z.string().optional().describe("Bank account number"),
       bankCode: z.string().optional().describe("Bank code"),
-      iban: z.string().optional(),
       discount: z.number().min(0).max(100).optional().describe("Default discount percentage"),
       creditLimit: z.number().optional().describe("Credit limit amount"),
       maturityDaysReceivable: z.number().int().optional().describe("Default maturity in days for receivables"),
       maturityDaysPayable: z.number().int().optional().describe("Default maturity in days for payables"),
-      groupCode: z.string().optional().describe("Partner group code"),
-      definitionShortcut: z.string().default("_AD").describe("XML transfer definition shortcut"),
+      definitionShortcut: definitionParam("_AD"),
     },
-    async (params) => {
-      try {
-        const addr = [
-          `name: "${escGql(params.name)}"`,
-          params.street ? `street: "${escGql(params.street)}"` : "",
-          params.city ? `municipality: "${escGql(params.city)}"` : "",
-          params.country ? `countryName: "${escGql(params.country)}"` : "",
-        ].filter(Boolean).join(", ");
-
-        const extras = [
-          params.identificationNumber ? `identificationNumber: "${escGql(params.identificationNumber)}"` : "",
-          params.vatNumber ? `vatIdentificationNumber: "${escGql(params.vatNumber)}"` : "",
-          params.isVatPayer != null ? `isVatPayer: ${params.isVatPayer}` : "",
-          params.isPhysicalPerson != null ? `isPerson: ${params.isPhysicalPerson}` : "",
-          params.email ? `email: "${escGql(params.email)}"` : "",
-          params.phone ? `phoneNumber: "${escGql(params.phone)}"` : "",
-          params.mobile ? `mobileNumber: "${escGql(params.mobile)}"` : "",
-          params.web ? `www: "${escGql(params.web)}"` : "",
-          params.bankAccountNumber ? `accountNumber: "${escGql(params.bankAccountNumber)}"` : "",
-          params.bankCode ? `bankCode: "${escGql(params.bankCode)}"` : "",
-          params.discount != null ? `discount: ${params.discount}` : "",
-          params.creditLimit != null ? `creditValue: ${params.creditLimit}` : "",
-          params.creditLimit != null ? `isCredit: true` : "",
-          params.maturityDaysReceivable != null ? `maturityReceivablesDays: ${params.maturityDaysReceivable}` : "",
-          params.maturityDaysPayable != null ? `maturityLiabilitiesDays: ${params.maturityDaysPayable}` : "",
-        ].filter(Boolean).join("\n      ");
-
-        const gql = `mutation {
-  createCompany(
-    company: {
-      businessAddress: { ${addr} }
-      ${extras}
-    }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{ createCompany: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.createCompany;
-        return textResult(`Contact "${params.name}" ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``);
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createCompany",
+        arg: "company",
+        label: `Contact "${p.name}"`,
+        verifyWith: "m3_address_book",
+        definitionShortcut: p.definitionShortcut,
+        input: {
+          // Address shape from the official examples (mutation_priklady.pdf).
+          businessAddress: addressInput({ ...p, postalCode: p.zip, countryName: p.country }),
+          identificationNumber: p.identificationNumber,
+          vatIdentificationNumber: p.vatNumber,
+          isVatPayer: p.isVatPayer,
+          isPerson: p.isPhysicalPerson,
+          email: p.email,
+          phoneNumber: p.phone,
+          mobileNumber: p.mobile,
+          www: p.web,
+          accountNumber: p.bankAccountNumber,
+          bankCode: p.bankCode,
+          discount: p.discount,
+          isDiscount: p.discount != null ? true : undefined,
+          creditValue: p.creditLimit,
+          isCredit: p.creditLimit != null ? true : undefined,
+          maturityReceivablesDays: p.maturityDaysReceivable,
+          isMaturityReceivables: p.maturityDaysReceivable != null ? true : undefined,
+          maturityLiabilitiesDays: p.maturityDaysPayable,
+          isMaturityLiabilities: p.maturityDaysPayable != null ? true : undefined,
+        },
+      }),
   );
 
   server.tool(
     "m3_delete_address",
-    "Delete an address book entry by ID",
-    {
-      id: z.number().int().positive().describe("Address record ID"),
-    },
-    async ({ id }) => {
-      try {
-        const gql = `mutation { deleteCompany(company: { id: ${id} }) { guid isSuccess } }`;
-        const data = await m3.query<{ deleteCompany: { guid: string; isSuccess: boolean } }>(gql, true);
-        const result = data.deleteCompany;
-        return textResult(`Address #${id} ${result.isSuccess ? "deleted" : "deletion queued"}.\nGUID: \`${result.guid}\``);
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Delete an address book entry by ID.",
+    { id: z.number().int().positive().describe("Address record ID") },
+    DELETE,
+    async ({ id }) =>
+      runMutation(m3, {
+        mutation: "deleteCompany",
+        arg: "company",
+        label: `Delete address #${id}`,
+        verifyWith: "m3_address_book",
+        input: { id },
+      }),
   );
 }

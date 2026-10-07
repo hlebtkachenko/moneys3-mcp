@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { buildArgs, textResult, errorResult } from "./helpers.js";
+import { READ, buildArgs, textResult, errorResult } from "./helpers.js";
 
 export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -13,16 +13,19 @@ export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
+        // The employee type is not in the schema summary: address and centre use the
+        // address / controlling shapes of the documented types (unverified).
         const gql = `{ employees(${buildArgs(take, skip, where, order)}) {
         items {
           id personalNumber firstName lastName
           dateOfBirth dateOfEntry dateOfDeparture
-          address { street city zip country }
+          address { street municipality municipalityPostalCode { postalCode } countryName }
           contact { email phone mobile }
           position department
-          costCenter { code name }
+          centre { shortCut name }
           employmentType
           note
         }
@@ -37,13 +40,13 @@ export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
         for (const e of emp.items) {
           const addr = e.address as Record<string, unknown> | undefined;
           const ct = e.contact as Record<string, unknown> | undefined;
-          const cc = e.costCenter as Record<string, unknown> | undefined;
+          const cc = e.centre as Record<string, unknown> | undefined;
 
           lines.push(`## ${e.firstName ?? ""} ${e.lastName ?? ""} (#${e.personalNumber ?? e.id ?? "?"})`);
           lines.push(`- Position: ${e.position ?? "—"} | Department: ${e.department ?? "—"} | Type: ${e.employmentType ?? "—"}`);
           lines.push(`- Entry: ${e.dateOfEntry ?? "—"}${e.dateOfDeparture ? ` | Departure: ${e.dateOfDeparture}` : ""}`);
-          if (cc?.code) lines.push(`- Cost center: ${cc.code} (${cc.name ?? "—"})`);
-          if (addr) lines.push(`- Address: ${[addr.street, addr.city, addr.zip, addr.country].filter(Boolean).join(", ") || "—"}`);
+          if (cc?.shortCut) lines.push(`- Cost center: ${cc.shortCut} (${cc.name ?? "—"})`);
+          if (addr) lines.push(`- Address: ${[addr.street, addr.municipality, (addr.municipalityPostalCode as Record<string, unknown> | undefined)?.postalCode, addr.countryName].filter(Boolean).join(", ") || "—"}`);
           if (ct) {
             const parts = [ct.email, ct.phone, ct.mobile].filter(Boolean);
             if (parts.length > 0) lines.push(`- Contact: ${parts.join(" | ")}`);
@@ -58,8 +61,6 @@ export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
     },
   );
 
-  // Note: payroll query does not exist in the API schema. Use createWage mutation for wages.
-
   server.tool(
     "m3_service_repairs",
     "Query service and repair records. Read-only.",
@@ -69,6 +70,7 @@ export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
       where: z.string().optional().describe("GraphQL where filter"),
       order: z.string().optional().describe("GraphQL order clause"),
     },
+    READ,
     async ({ take, skip, where, order }) => {
       try {
         const gql = `{ services(${buildArgs(take, skip, where, order)}) {

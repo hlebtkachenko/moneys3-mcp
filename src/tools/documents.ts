@@ -2,513 +2,227 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
 import {
-  escGql,
-  DATE_RE,
-  DATE_MSG,
-  buildArgs,
-  filterDeleted,
-  textResult,
-  errorResult,
+  CREATE,
+  READ,
+  controllingInput,
+  controllingParams,
+  controllingText,
+  dateParam,
+  definitionParam,
+  isoDate,
+  listParams,
+  listTool,
+  partnerInput,
+  partnerSchema,
+  runMutation,
+  str,
+  vatText,
 } from "./helpers.js";
 
-const DOC_FIELDS = `
-  items {
-    id isDeleted documentNumber dateOfIssue dateOfAccounting dateOfMaturity
-    dateOfPayment isSettled remainingToPay
-    totalPriceHcWithVat totalPriceHcWithoutVat
-    currency { code }
-    vatSummary {
-      baseZeroRate baseReducedRate baseStandardRate
-      vatReducedRate vatStandardRate
-    }
-    partnerAddress {
-      businessAddress { name street city zip country }
-      company { identificationNumber vatNumber }
-    }
-    variableSymbol constantSymbol specificSymbol
-    costCenter { code name }
-    project { code name }
-    activity { code name }
-    account predefinedEntry
-    text note
-    items { description amount unitPriceHc vatRate }
-  }
-  totalCount
+// Field sets follow the IInternalDocument / ILiability / IReceivable entries of
+// docs/schema-summary.json. Sub-types (partnerAddress, normalItems) are not in
+// the summary: their selections are kept minimal and are unverified.
+const COMMON_FIELDS = `
+  id year isDeleted documentNumber dateOfAccountingEvent dateOfTaxing
+  description variableSymbol pairingSymbol note
+  totalWithVatHc currency { code }
+  vatRateSummaryHc { vatRate totalWithoutVat totalVat }
+  partnerAddress { identificationNumber vatIdentificationNumber }
+  centre { shortCut name } jobOrder { shortCut name } operation { shortCut name }
+  accountAssignment { accountAssignmentAcc { shortCut } }
+  normalItems { description }
+`;
+
+const INTERNAL_FIELDS = COMMON_FIELDS;
+
+const RECEIVABLE_LIABILITY_FIELDS = `${COMMON_FIELDS}
+  dateOfIssue dateOfMaturity dateOfPayment isCreditNote
+  constantSymbol specificSymbol remainingAmountToPayHc
 `;
 
 function formatDoc(d: Record<string, unknown>): string {
   const partner = d.partnerAddress as Record<string, unknown> | undefined;
-  const biz = partner?.businessAddress as Record<string, unknown> | undefined;
-  const co = partner?.company as Record<string, unknown> | undefined;
   const cur = d.currency as Record<string, unknown> | undefined;
-  const vat = d.vatSummary as Record<string, unknown> | undefined;
-  const cc = d.costCenter as Record<string, unknown> | undefined;
-  const proj = d.project as Record<string, unknown> | undefined;
-  const act = d.activity as Record<string, unknown> | undefined;
-  const items = d.items as Array<Record<string, unknown>> | undefined;
+  const aa = (d.accountAssignment as Record<string, unknown> | undefined)?.accountAssignmentAcc as Record<string, unknown> | undefined;
+  const items = d.normalItems as Array<Record<string, unknown>> | undefined;
 
   const lines = [
-    `## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})`,
-    `- Partner: ${biz?.name ?? "—"} (ICO: ${co?.identificationNumber ?? "—"}, VAT: ${co?.vatNumber ?? "—"})`,
-    `- Address: ${[biz?.street, biz?.city, biz?.zip, biz?.country].filter(Boolean).join(", ") || "—"}`,
-    `- VS: ${d.variableSymbol ?? "—"} | KS: ${d.constantSymbol ?? "—"} | SS: ${d.specificSymbol ?? "—"}`,
-    `- Total: ${d.totalPriceHcWithVat ?? "?"} ${cur?.code ?? "CZK"} (without VAT: ${d.totalPriceHcWithoutVat ?? "?"})`,
+    `## ${str(d.documentNumber)}${d.isCreditNote ? " [CREDIT NOTE]" : ""} (id ${str(d.id)}, year ${str(d.year)})`,
+    `- Dates: issue ${str(d.dateOfIssue)} | accounting ${str(d.dateOfAccountingEvent)} | taxing ${str(d.dateOfTaxing)}${d.dateOfMaturity ? ` | maturity ${d.dateOfMaturity}` : ""}`,
+    `- Partner ICO: ${str(partner?.identificationNumber)} | DIC: ${str(partner?.vatIdentificationNumber)}`,
+    `- VS: ${str(d.variableSymbol)}${"constantSymbol" in d ? ` | KS: ${str(d.constantSymbol)} | SS: ${str(d.specificSymbol)}` : ""}`,
+    `- Total: ${str(d.totalWithVatHc, "?")} ${str(cur?.code, "CZK")}`,
   ];
-
-  if (d.dateOfMaturity) {
-    lines.push(
-      `- Maturity: ${d.dateOfMaturity} | Paid: ${d.isSettled ? `Yes (${d.dateOfPayment ?? "—"})` : `No — remaining: ${d.remainingToPay ?? "?"}`}`,
-    );
+  if ("remainingAmountToPayHc" in d) {
+    lines.push(`- Remaining to pay: ${str(d.remainingAmountToPayHc, "?")}${d.dateOfPayment ? ` (last payment ${d.dateOfPayment})` : ""}`);
   }
-
-  if (vat) {
-    const vatParts = [];
-    if (vat.baseStandardRate)
-      vatParts.push(
-        `standard: ${vat.baseStandardRate} + ${vat.vatStandardRate}`,
-      );
-    if (vat.baseReducedRate)
-      vatParts.push(`reduced: ${vat.baseReducedRate} + ${vat.vatReducedRate}`);
-    if (vatParts.length > 0) lines.push(`- VAT: ${vatParts.join(" | ")}`);
-  }
-
-  const ctrl = [
-    cc?.code && `CC:${cc.code}`,
-    proj?.code && `Proj:${proj.code}`,
-    act?.code && `Act:${act.code}`,
-  ].filter(Boolean);
-  if (ctrl.length > 0) lines.push(`- Controlling: ${ctrl.join(" ")}`);
-  if (d.account)
-    lines.push(`- Account: ${d.account} | Entry: ${d.predefinedEntry ?? "—"}`);
-
-  if (items && items.length > 0) {
-    lines.push("- Items:");
-    for (const it of items) {
-      lines.push(
-        `  - ${it.description ?? "—"}: ${it.amount ?? 0} × ${it.unitPriceHc ?? 0} (VAT ${it.vatRate ?? "—"}%)`,
-      );
-    }
-  }
-
-  if (d.text) lines.push(`- Text: ${d.text}`);
+  for (const line of [vatText(d), controllingText(d)]) if (line) lines.push(line);
+  if (aa?.shortCut) lines.push(`- Account assignment: ${aa.shortCut}`);
+  if (items?.length) lines.push(`- Items: ${items.map((it) => str(it.description)).join("; ")}`);
+  if (d.description) lines.push(`- Description: ${d.description}`);
   if (d.note) lines.push(`- Note: ${d.note}`);
   return lines.join("\n");
 }
 
-function formatSimpleDocs(
-  entityName: string,
-  data: { items: Record<string, unknown>[]; totalCount: number },
-): string {
-  const items = filterDeleted(data?.items ?? []);
-  if (!items.length) return `No ${entityName} found.`;
-  const header = `# ${entityName} (${items.length} of ${data.totalCount})\n`;
-  return header + items.map(formatDoc).join("\n\n");
+function formatStockTaking(d: Record<string, unknown>): string {
+  const lines = [`## Stocktaking document id ${str(d.id)}${d.description ? `: ${d.description}` : ""}`];
+  for (const it of (d.items as Array<Record<string, unknown>> | undefined) ?? []) {
+    const art = it.article as Record<string, unknown> | undefined;
+    const wh = it.warehouse as Record<string, unknown> | undefined;
+    lines.push(`- ${str(art?.description)} [${str(art?.catalogue)}] in ${str(wh?.code)}: counted ${str(it.inventoryAmount, "?")}`);
+  }
+  if (d.note) lines.push(`- Note: ${d.note}`);
+  return lines.join("\n");
+}
+
+const documentParams = {
+  documentNumber: z.string().optional(),
+  description: z.string().optional().describe("Document description"),
+  variableSymbol: z.string().optional(),
+  partner: partnerSchema.optional(),
+  ...controllingParams,
+};
+
+const receivableLiabilityParams = {
+  dateOfIssue: dateParam("Issue date"),
+  dateOfAccountingEvent: dateParam("Accounting event date").optional(),
+  dateOfMaturity: dateParam("Maturity date").optional(),
+  constantSymbol: z.string().optional(),
+  specificSymbol: z.string().optional(),
+  ...documentParams,
+};
+
+type ReceivableLiability = {
+  dateOfIssue: string;
+  dateOfAccountingEvent?: string;
+  dateOfMaturity?: string;
+  documentNumber?: string;
+  description?: string;
+  variableSymbol?: string;
+  constantSymbol?: string;
+  specificSymbol?: string;
+  partner?: z.infer<typeof partnerSchema>;
+  costCenterCode?: string;
+  projectCode?: string;
+  activityCode?: string;
+};
+
+function receivableLiabilityInput(p: ReceivableLiability) {
+  return {
+    dateOfIssue: isoDate(p.dateOfIssue),
+    dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
+    dateOfMaturity: isoDate(p.dateOfMaturity),
+    documentNumber: p.documentNumber,
+    description: p.description,
+    variableSymbol: p.variableSymbol,
+    constantSymbol: p.constantSymbol,
+    specificSymbol: p.specificSymbol,
+    partnerAddress: partnerInput(p.partner),
+    ...controllingInput(p),
+  };
 }
 
 export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_internal_documents",
-    "Query internal documents with VAT breakdown, payment status, controlling variables",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional(),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ internalDocuments(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{
-          internalDocuments: {
-            items: Record<string, unknown>[];
-            totalCount: number;
-          };
-        }>(gql);
-        return textResult(
-          formatSimpleDocs("Internal Documents", data.internalDocuments),
-        );
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query internal documents (interní doklady) with VAT summary and controlling variables. Read-only.",
+    listParams(),
+    READ,
+    async (args) => listTool(m3, "internalDocuments", INTERNAL_FIELDS, "Internal Documents", args, formatDoc),
   );
 
   server.tool(
     "m3_liabilities",
-    "Query liabilities (payables/obligations) with VAT, payment status, maturity dates, controlling vars",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional(),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ liabilities(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{
-          liabilities: { items: Record<string, unknown>[]; totalCount: number };
-        }>(gql);
-        return textResult(formatSimpleDocs("Liabilities", data.liabilities));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query liabilities (ostatní závazky) with maturity, remaining amount, VAT summary and controlling variables. Read-only.",
+    listParams(),
+    READ,
+    async (args) => listTool(m3, "liabilities", RECEIVABLE_LIABILITY_FIELDS, "Liabilities", args, formatDoc),
   );
 
   server.tool(
     "m3_receivables",
-    "Query receivables (amounts owed to you) with VAT, payment status, maturity dates, controlling vars",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional(),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ receivables(${buildArgs(take, skip, where, order)}) { ${DOC_FIELDS} } }`;
-        const data = await m3.query<{
-          receivables: { items: Record<string, unknown>[]; totalCount: number };
-        }>(gql);
-        return textResult(formatSimpleDocs("Receivables", data.receivables));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query receivables (ostatní pohledávky) with maturity, remaining amount, VAT summary and controlling variables. Read-only.",
+    listParams(),
+    READ,
+    async (args) => listTool(m3, "receivables", RECEIVABLE_LIABILITY_FIELDS, "Receivables", args, formatDoc),
   );
 
   server.tool(
     "m3_inventory_documents",
-    "Query inventory (stocktaking) documents with line items and expected vs real amounts",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional(),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ inventoryDocuments(${buildArgs(take, skip, where, order)}) {
-        items {
-          id documentNumber dateOfIssue
-          warehouse { name code }
-          items {
-            stockCard { name catalogueNumber }
-            expectedAmount realAmount difference
-            unitPriceHc
-          }
-        }
-        totalCount
-      } }`;
-        const data = await m3.query<{
-          inventoryDocuments: {
-            items: Record<string, unknown>[];
-            totalCount: number;
-          };
-        }>(gql);
-        const inv = data.inventoryDocuments;
-        if (!inv?.items?.length)
-          return textResult("No inventory documents found.");
-
-        const lines = [
-          `# Inventory Documents (${inv.items.length} of ${inv.totalCount})`,
-          "",
-        ];
-        for (const d of inv.items) {
-          const wh = d.warehouse as Record<string, unknown> | undefined;
-          lines.push(
-            `## ${d.documentNumber ?? "—"} (${d.dateOfIssue ?? "—"})${wh?.name ? ` — Warehouse: ${wh.name}` : ""}`,
-          );
-          const items = d.items as Array<Record<string, unknown>> | undefined;
-          for (const it of items ?? []) {
-            const sc = it.stockCard as Record<string, unknown> | undefined;
-            lines.push(
-              `- ${sc?.name ?? "—"} [${sc?.catalogueNumber ?? "—"}]: expected ${it.expectedAmount ?? "?"}, actual ${it.realAmount ?? "?"}, diff ${it.difference ?? "?"} (@ ${it.unitPriceHc ?? "?"})`,
-            );
-          }
-          lines.push("");
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Query stocktaking documents (inventurní doklady) with counted amounts per article and warehouse. Read-only.",
+    listParams(),
+    READ,
+    // Root name from 950ac9a's collection list; item field names mirror the
+    // createStockTakingDocument example in mutation_priklady.pdf (unverified for reads).
+    async (args) =>
+      listTool(
+        m3,
+        "stockTakingDocuments",
+        "id isDeleted description note items { article { catalogue description } inventoryAmount warehouse { code name } }",
+        "Stocktaking Documents",
+        args,
+        formatStockTaking,
+      ),
   );
 
   server.tool(
     "m3_create_internal_document",
-    "Create an internal document with controlling variables. Async import queue.",
+    "Create an internal document. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      dateOfAccountingEvent: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .describe("Date of accounting event (DD.MM.YYYY)"),
-      documentNumber: z.string().optional(),
-      description: z.string().optional().describe("Document description"),
-      variableSymbol: z.string().optional(),
-      costCenterCode: z.string().optional().describe("Cost center shortcut"),
-      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z
-        .string()
-        .optional()
-        .describe("Activity shortcut (činnost)"),
-      definitionShortcut: z
-        .string()
-        .default("_ID")
-        .describe("XML transfer definition shortcut"),
+      dateOfAccountingEvent: dateParam("Date of accounting event"),
+      dateOfTaxing: dateParam("VAT date").optional(),
+      ...documentParams,
+      definitionShortcut: definitionParam("_ID"),
     },
-    async (params) => {
-      try {
-        const fields = [
-          `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`,
-          params.documentNumber
-            ? `documentNumber: "${escGql(params.documentNumber)}"`
-            : "",
-          params.description
-            ? `description: "${escGql(params.description)}"`
-            : "",
-          params.variableSymbol
-            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(", ");
-
-        const extras = [
-          params.costCenterCode
-            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
-            : "",
-          params.projectCode
-            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
-            : "",
-          params.activityCode
-            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n      ");
-
-        const gql = `mutation {
-  createInternalDocument(
-    internalDocument: { ${fields} ${extras} }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{
-          createInternalDocument: { guid: string; isSuccess: boolean };
-        }>(gql, true);
-        const result = data.createInternalDocument;
-        return textResult(
-          `Internal document ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
-        );
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createInternalDocument",
+        arg: "internalDocument",
+        label: "Internal document",
+        verifyWith: "m3_internal_documents",
+        definitionShortcut: p.definitionShortcut,
+        input: {
+          dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
+          dateOfTaxing: isoDate(p.dateOfTaxing),
+          documentNumber: p.documentNumber,
+          description: p.description,
+          variableSymbol: p.variableSymbol,
+          partnerAddress: partnerInput(p.partner),
+          ...controllingInput(p),
+        },
+      }),
   );
 
   server.tool(
     "m3_create_liability",
-    "Create a liability (závazek/payable) with maturity date and controlling vars. Async import queue.",
-    {
-      dateOfIssue: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .describe("Issue date (DD.MM.YYYY)"),
-      dateOfAccountingEvent: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .optional()
-        .describe("Accounting event date (DD.MM.YYYY)"),
-      dateOfMaturity: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .optional()
-        .describe("Maturity date (DD.MM.YYYY)"),
-      documentNumber: z.string().optional(),
-      description: z.string().optional().describe("Document description"),
-      variableSymbol: z.string().optional(),
-      constantSymbol: z.string().optional(),
-      specificSymbol: z.string().optional(),
-      partnerName: z.string().optional().describe("Partner/creditor name"),
-      partnerIco: z.string().optional().describe("Partner ICO"),
-      costCenterCode: z.string().optional().describe("Cost center shortcut"),
-      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z
-        .string()
-        .optional()
-        .describe("Activity shortcut (činnost)"),
-      definitionShortcut: z
-        .string()
-        .default("_ZV")
-        .describe("XML transfer definition shortcut"),
-    },
-    async (params) => {
-      try {
-        const fields = [
-          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-          params.dateOfAccountingEvent
-            ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`
-            : "",
-          params.dateOfMaturity
-            ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"`
-            : "",
-          params.documentNumber
-            ? `documentNumber: "${escGql(params.documentNumber)}"`
-            : "",
-          params.description
-            ? `description: "${escGql(params.description)}"`
-            : "",
-          params.variableSymbol
-            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
-            : "",
-          params.constantSymbol
-            ? `constantSymbol: "${escGql(params.constantSymbol)}"`
-            : "",
-          params.specificSymbol
-            ? `specificSymbol: "${escGql(params.specificSymbol)}"`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(", ");
-
-        const extras = [
-          params.partnerName
-            ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }`
-            : "",
-          params.costCenterCode
-            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
-            : "",
-          params.projectCode
-            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
-            : "",
-          params.activityCode
-            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n      ");
-
-        const gql = `mutation {
-  createLiability(
-    liability: { ${fields} ${extras} }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{
-          createLiability: { guid: string; isSuccess: boolean };
-        }>(gql, true);
-        const result = data.createLiability;
-        return textResult(
-          `Liability ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
-        );
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Create a liability (závazek). Written to the Money S3 import queue; check the result with m3_import_status.",
+    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_ZV") },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createLiability",
+        arg: "liability",
+        label: "Liability",
+        verifyWith: "m3_liabilities",
+        definitionShortcut: p.definitionShortcut,
+        input: receivableLiabilityInput(p),
+      }),
   );
 
   server.tool(
     "m3_create_receivable",
-    "Create a receivable (pohledávka) with maturity date and controlling vars. Async import queue.",
-    {
-      dateOfIssue: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .describe("Issue date (DD.MM.YYYY)"),
-      dateOfAccountingEvent: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .optional()
-        .describe("Accounting event date (DD.MM.YYYY)"),
-      dateOfMaturity: z
-        .string()
-        .regex(DATE_RE, DATE_MSG)
-        .optional()
-        .describe("Maturity date (DD.MM.YYYY)"),
-      documentNumber: z.string().optional(),
-      description: z.string().optional().describe("Document description"),
-      variableSymbol: z.string().optional(),
-      constantSymbol: z.string().optional(),
-      specificSymbol: z.string().optional(),
-      partnerName: z.string().optional().describe("Partner/debtor name"),
-      partnerIco: z.string().optional().describe("Partner ICO"),
-      costCenterCode: z.string().optional().describe("Cost center shortcut"),
-      projectCode: z.string().optional().describe("Project shortcut (zakázka)"),
-      activityCode: z
-        .string()
-        .optional()
-        .describe("Activity shortcut (činnost)"),
-      definitionShortcut: z
-        .string()
-        .default("_PH")
-        .describe("XML transfer definition shortcut"),
-    },
-    async (params) => {
-      try {
-        const fields = [
-          `dateOfIssue: "${escGql(params.dateOfIssue)}"`,
-          params.dateOfAccountingEvent
-            ? `dateOfAccountingEvent: "${escGql(params.dateOfAccountingEvent)}"`
-            : "",
-          params.dateOfMaturity
-            ? `dateOfMaturity: "${escGql(params.dateOfMaturity)}"`
-            : "",
-          params.documentNumber
-            ? `documentNumber: "${escGql(params.documentNumber)}"`
-            : "",
-          params.description
-            ? `description: "${escGql(params.description)}"`
-            : "",
-          params.variableSymbol
-            ? `variableSymbol: "${escGql(params.variableSymbol)}"`
-            : "",
-          params.constantSymbol
-            ? `constantSymbol: "${escGql(params.constantSymbol)}"`
-            : "",
-          params.specificSymbol
-            ? `specificSymbol: "${escGql(params.specificSymbol)}"`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(", ");
-
-        const extras = [
-          params.partnerName
-            ? `partnerAddress: { businessAddress: { name: "${escGql(params.partnerName)}" }${params.partnerIco ? ` identificationNumber: "${escGql(params.partnerIco)}"` : ""} }`
-            : "",
-          params.costCenterCode
-            ? `centre: { shortCut: "${escGql(params.costCenterCode)}" }`
-            : "",
-          params.projectCode
-            ? `jobOrder: { shortCut: "${escGql(params.projectCode)}" }`
-            : "",
-          params.activityCode
-            ? `operation: { shortCut: "${escGql(params.activityCode)}" }`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n      ");
-
-        const gql = `mutation {
-  createReceivable(
-    receivable: { ${fields} ${extras} }
-    definitionXMLTransfer: { shortCut: "${escGql(params.definitionShortcut)}" }
-  ) { guid isSuccess }
-}`;
-
-        const data = await m3.query<{
-          createReceivable: { guid: string; isSuccess: boolean };
-        }>(gql, true);
-        const result = data.createReceivable;
-        return textResult(
-          `Receivable ${result.isSuccess ? "created" : "queued"}.\nGUID: \`${result.guid}\``,
-        );
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    "Create a receivable (pohledávka). Written to the Money S3 import queue; check the result with m3_import_status.",
+    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_PH") },
+    CREATE,
+    async (p) =>
+      runMutation(m3, {
+        mutation: "createReceivable",
+        arg: "receivable",
+        label: "Receivable",
+        verifyWith: "m3_receivables",
+        definitionShortcut: p.definitionShortcut,
+        input: receivableLiabilityInput(p),
+      }),
   );
 }
