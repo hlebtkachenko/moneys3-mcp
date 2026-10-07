@@ -109,6 +109,21 @@ test("finding 2: cash desk documents use ICashVoucher fields", async () => {
   assert.deepEqual(validate(last()).errors, []);
 });
 
+test("kept fixes: document reads skip the cache (950ac9a); bank/cash partner uses address (6dca522)", async () => {
+  await call("m3_issued_invoices", {});
+  await call("m3_issued_invoices", {});
+  assert.equal(fake.requests.length, 2);
+  for (const name of ["m3_bank_documents", "m3_cash_desk_documents"]) {
+    await call(name, {});
+    assert.match(last(), /partnerAddress \{\s*address \{ name/, name);
+  }
+});
+
+test("import status accepts any 8-4-4-4-12 GUID", async () => {
+  const r = await call("m3_import_status", { guid: "ABCDEF01-2345-0789-0BCD-EF0123456789" });
+  assert.ok(!r.isError, text(r));
+});
+
 test("finding 3: isSuccess=false is an error for creates and deletes; import status is queryable", async () => {
   fake.respond = (query) => {
     const data = defaultData(query);
