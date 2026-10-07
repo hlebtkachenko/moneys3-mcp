@@ -291,8 +291,9 @@ Layout and design: [ARCHITECTURE.md](ARCHITECTURE.md). Contributor rules: [AGENT
 - Reads retry on timeout; any request retries on 401 (token refresh) and 429 (rate limit)
 - Mutations are never resent after a timeout or transport error: the tool reports "outcome unknown" and names the tool to verify with
 - Response cache (configurable TTL) for reads only; mutations bypass and clear it; document collections are never cached
-- Tool arguments are encoded as GraphQL literals (strings JSON-escaped, enum values checked against `^[A-Z][A-Z0-9_]*$`), never interpolated raw
-- `m3_graphql` accepts any document (max 10,000 characters) and is annotated destructive
+- Mutation inputs are encoded as GraphQL literals (strings JSON-escaped, numbers finite, enum values checked against `^[A-Z][A-Z0-9_]*$`)
+- `where`/`order` on read tools are user-supplied GraphQL: they are inserted only after parsing as a single object or list value, and read tools reject any document that contains a mutation
+- `m3_graphql` sends any document (max 10,000 characters) and is annotated destructive
 - No credentials logged or exposed in error messages
 
 ## Important Notes
