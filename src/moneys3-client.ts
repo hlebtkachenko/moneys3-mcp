@@ -23,9 +23,6 @@ export interface MoneyS3Config {
   agendaGuid?: string;
   cacheTtl?: number;
   maxRetries?: number;
-  /** Overrides https://{domain}.api.moneys3.eu (used by tests). */
-  baseUrl?: string;
-  timeoutMs?: number;
 }
 
 interface TokenResponse {
@@ -99,7 +96,6 @@ export class MoneyS3Client {
   private clientSecret: string;
   private agendaGuid: string | undefined;
   private maxRetries: number;
-  private timeoutMs: number;
   private base: string;
 
   private accessToken: string | null = null;
@@ -108,13 +104,12 @@ export class MoneyS3Client {
   readonly cache: ResponseCache;
 
   constructor(config: MoneyS3Config) {
-    this.base = config.baseUrl ?? `https://${config.domain}.api.moneys3.eu`;
+    this.base = `https://${config.domain}.api.moneys3.eu`;
     this.appId = config.appId;
     this.clientId = config.clientId;
     this.clientSecret = config.clientSecret;
     this.agendaGuid = config.agendaGuid;
     this.maxRetries = config.maxRetries ?? 3;
-    this.timeoutMs = config.timeoutMs ?? TIMEOUT_MS;
     this.cache = new ResponseCache(config.cacheTtl ?? 120);
   }
 
@@ -157,7 +152,7 @@ export class MoneyS3Client {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -215,10 +210,22 @@ export class MoneyS3Client {
     return headers;
   }
 
+  /** Token requests send no GraphQL, so a timed-out one is safe to retry for mutations too. */
+  private async tokenWithRetry(): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.fetchToken();
+      } catch (err) {
+        if ((err as Error).name !== "TimeoutError" || attempt >= this.maxRetries) throw err;
+        await sleep(1000 * 2 ** attempt);
+      }
+    }
+  }
+
   /** POSTs the document, retrying only where the request was certainly not processed (or is a read). */
   private async post(gql: string, isMutation: boolean, verifyWith: string): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
-      const headers = this.headers(await this.fetchToken(), gql);
+      const headers = this.headers(await this.tokenWithRetry(), gql);
       const canRetry = attempt < this.maxRetries;
       let res: Response;
       try {
@@ -226,7 +233,7 @@ export class MoneyS3Client {
           method: "POST",
           headers,
           body: JSON.stringify({ query: gql }),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (err) {
         if (isMutation) {
