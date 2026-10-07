@@ -170,7 +170,7 @@ export function buildArgs(take: number, skip: number, where?: string, order?: st
   return parts.join(", ");
 }
 
-export interface Connection {
+interface Connection {
   items?: Record<string, unknown>[];
   totalCount?: number;
 }
