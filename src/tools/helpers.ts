@@ -12,7 +12,7 @@ import type { MoneyS3Client } from "../moneys3-client.js";
 const ENUM_RE = /^[A-Z][A-Z0-9_]*$/;
 const NAME_RE = /^[_A-Za-z][_0-9A-Za-z]*$/;
 
-export class GqlEnum {
+class GqlEnum {
   constructor(readonly value: string) {
     if (!ENUM_RE.test(value)) throw new Error(`Invalid enum value: ${value}`);
   }
@@ -30,7 +30,7 @@ export type GqlInput =
   | { [key: string]: GqlInput };
 
 /** Encodes a value as a GraphQL input literal. Undefined fields and empty objects are dropped. */
-export function gqlValue(value: GqlInput): string | undefined {
+function gqlValue(value: GqlInput): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number") {
@@ -58,7 +58,7 @@ export const enumParam = () =>
 // Dates: the official mutation examples (mutation_priklady.pdf) send every
 // date as ISO "YYYY-MM-DD". Tools accept ISO or DD.MM.YYYY and send ISO.
 
-export const DATE_RE = /^(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})$/;
+const DATE_RE = /^(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})$/;
 
 export const dateParam = (what: string) =>
   z.string().regex(DATE_RE, "Expected YYYY-MM-DD or DD.MM.YYYY").describe(`${what} (YYYY-MM-DD or DD.MM.YYYY)`);
@@ -180,7 +180,7 @@ export interface Connection {
  * because the API does not accept isDeleted as a filter (c8f7ab3), so the
  * header says how many were hidden and that totalCount still counts them.
  */
-export function listText(
+function listText(
   title: string,
   conn: Connection | undefined,
   skip: number,
@@ -222,7 +222,7 @@ export interface MutationSpec {
   verifyWith: string;
 }
 
-export function buildMutation(spec: MutationSpec): string {
+function buildMutation(spec: MutationSpec): string {
   const def = spec.definitionShortcut ? `, definitionXMLTransfer: { shortCut: ${JSON.stringify(spec.definitionShortcut)} }` : "";
   return `mutation { ${spec.mutation}(${spec.arg}: ${gqlValue(spec.input) ?? "{ }"}${def}) { guid isSuccess } }`;
 }

@@ -74,7 +74,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Classifies a GraphQL document by parsing it; any mutation operation makes it a mutation. */
-export function operationKind(gql: string): "query" | "mutation" {
+function operationKind(gql: string): "query" | "mutation" {
   let doc;
   try {
     doc = parse(gql);

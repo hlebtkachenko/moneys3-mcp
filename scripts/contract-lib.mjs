@@ -87,7 +87,7 @@ const BY_KEY = { year: 2026, month: 3, countryCode: "CZ", guid: "00000000-0000-4
 const BY_PATTERN = [[/\\d\{4\}/, "2026-01-15"], [/A-Z/, "SAMPLE_VALUE"]];
 
 /** Sample arguments from a tool's JSON input schema: all fields, or required fields only. */
-export function sample(schema, key = "", requiredOnly = false) {
+function sample(schema, key = "", requiredOnly = false) {
   if (key in BY_KEY) return BY_KEY[key];
   if (schema.enum) return schema.enum[0];
   if (schema.anyOf) return sample(schema.anyOf[0], key, requiredOnly);
