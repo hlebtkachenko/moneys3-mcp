@@ -3,6 +3,45 @@ import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
 import { RAW, READ, errorResult, listParams, listTool, str, textResult } from "./helpers.js";
 
+const OUTPUT_LIMIT = 50_000;
+
+/**
+ * Keeps m3_graphql output valid JSON under OUTPUT_LIMIT: pretty if it fits,
+ * else compact, else whole records dropped from the end of each `items` list
+ * with a second content block saying what was left out. Never cuts mid-JSON.
+ */
+function fitResult(data: unknown) {
+  const compact = JSON.stringify(data);
+  for (const text of [JSON.stringify(data, null, 2), compact]) if (text.length <= OUTPUT_LIMIT) return textResult(text);
+
+  // GraphQL data is always an object keyed by root field.
+  const trimmed = structuredClone(data) as Record<string, { items?: unknown[] } | null>;
+  const notes: string[] = [];
+  let size = compact.length;
+  for (const [root, conn] of Object.entries(trimmed).reverse()) {
+    const items = Array.isArray(conn?.items) ? conn.items : [];
+    const returned = items.length;
+    while (size > OUTPUT_LIMIT && items.length) size -= JSON.stringify(items.pop()).length + 1;
+    if (items.length < returned) {
+      notes.push(`${root}: first ${items.length} of ${returned} returned items shown; fetch the rest with a smaller take and a higher skip`);
+    }
+  }
+  const json = JSON.stringify(trimmed);
+  if (notes.length && json.length <= OUTPUT_LIMIT) {
+    return {
+      content: [
+        { type: "text" as const, text: json },
+        { type: "text" as const, text: `Output over ${OUTPUT_LIMIT / 1000} KB, trimmed to whole records. ${notes.join("; ")}.` },
+      ],
+    };
+  }
+  return textResult(
+    `Result is ${Math.round(compact.length / 1000)} KB, over the ${OUTPUT_LIMIT / 1000} KB output limit, and cannot be trimmed to whole records. ` +
+      `Top-level fields: ${Object.keys(trimmed).join(", ")}. Narrow the query: select fewer fields, use take/skip, ` +
+      "or for introspection ask for one type at a time with __type(name: ...).",
+  );
+}
+
 export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_graphql",
@@ -13,11 +52,7 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
     RAW,
     async ({ query }) => {
       try {
-        const formatted = JSON.stringify(await m3.raw<unknown>(query), null, 2);
-        if (formatted.length > 50_000) {
-          return textResult(`${formatted.slice(0, 50_000)}\n\n... (truncated, use take/skip to limit results)`);
-        }
-        return textResult(formatted);
+        return fitResult(await m3.raw<unknown>(query));
       } catch (err) {
         return errorResult((err as Error).message);
       }

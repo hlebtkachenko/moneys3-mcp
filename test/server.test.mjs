@@ -283,3 +283,20 @@ test("GraphQL errors and HTTP errors on reads are errors, not empty lists", asyn
   assert.ok(r.isError);
   assert.match(text(r), /Synthetic failure/);
 });
+
+test("m3_graphql never cuts JSON: large lists drop whole records and say so", async () => {
+  const items = Array.from({ length: 2000 }, (_, i) => ({ shortCut: `CC${i}`, name: "Synthetic centre with a longer name" }));
+  fake.respond = () => Response.json({ data: { centres: { items, totalCount: 5000 } } });
+  const r = await call("m3_graphql", { query: "{ centres(take: 2000) { items { shortCut name } totalCount } }" });
+  assert.ok(!r.isError, text(r));
+  const json = JSON.parse(r.content[0].text);
+  assert.ok(r.content[0].text.length <= 50_000);
+  assert.ok(json.centres.items.length > 0 && json.centres.items.length < 2000);
+  assert.equal(json.centres.totalCount, 5000);
+  assert.match(r.content[1].text, new RegExp(`centres: first ${json.centres.items.length} of 2000 returned items shown`));
+
+  fake.respond = () => Response.json({ data: { __schema: { types: Array.from({ length: 3000 }, (_, i) => ({ name: `Type${i}`, kind: "OBJECT" })) } } });
+  const big = await call("m3_graphql", { query: "{ __schema { types { name kind } } }" });
+  assert.equal(big.content.length, 1);
+  assert.match(text(big), /over the 50 KB output limit.*__type\(name/s);
+});
