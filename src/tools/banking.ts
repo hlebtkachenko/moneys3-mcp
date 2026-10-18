@@ -15,7 +15,10 @@ import {
   listTool,
   partnerInput,
   partnerSchema,
+  postingInput,
+  postingParams,
   runMutation,
+  seriesParams,
   str,
   textResult,
   updateTool,
@@ -79,10 +82,11 @@ const paymentFields = {
   variableSymbol: z.string().optional(),
   partner: partnerSchema.optional(),
   ...controllingParams,
+  ...postingParams,
   description: z.string().optional().describe("Description"),
 };
 
-const paymentParams = { ...paymentFields, documentNumber: z.string().optional() };
+const paymentParams = { ...paymentFields, ...seriesParams, documentNumber: z.string().optional() };
 
 // isExpense: false from a client filling optional fields would turn an expense into a receipt.
 const { isExpense: _isExpense, partner: _partner, ...paymentUpdateFields } = paymentFields;
@@ -125,6 +129,9 @@ type PaymentParams = {
   projectCode?: string;
   activityCode?: string;
   description?: string;
+  numericalSeriePrefix?: string;
+  accountAssignmentCode?: string;
+  vatClassificationCode?: string;
 };
 
 function paymentInput(p: Partial<PaymentParams>) {
@@ -138,6 +145,7 @@ function paymentInput(p: Partial<PaymentParams>) {
     description: p.description,
     partnerAddress: partnerInput(p.partner),
     ...controllingInput(p),
+    ...postingInput(p),
   };
 }
 

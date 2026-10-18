@@ -136,6 +136,40 @@ export function controllingInput(p: { costCenterCode?: string; projectCode?: str
   };
 }
 
+// Series and předkontace come from the XML definition's presets when omitted.
+export const seriesParams = {
+  numericalSeriePrefix: z
+    .string()
+    .optional()
+    .describe("Numerical series prefix (see m3_numerical_series). Omitted on create: the XML definition's preset; Money S3 rejects the import if there is none"),
+};
+
+export const postingParams = {
+  accountAssignmentCode: z
+    .string()
+    .optional()
+    .describe("Předkontace shortcut (see m3_predefined_entries). Omitted on create: the XML definition's preset; without one Money S3 saves the document unposted"),
+  vatClassificationCode: z
+    .string()
+    .optional()
+    .describe("VAT classification shortcut (členění DPH, see m3_vat_classifications). Omitted on create: the XML definition's preset; Money S3 requires one when the document is posted"),
+};
+
+export const paymentAccountParams = {
+  paymentAccountCode: z
+    .string()
+    .optional()
+    .describe("Bank account or cash box shortcut the document is paid through (see m3_bank_accounts). Omitted on create: the XML definition's preset; Money S3 rejects the import if there is none"),
+};
+
+export function postingInput(p: { numericalSeriePrefix?: string; accountAssignmentCode?: string; vatClassificationCode?: string }) {
+  return {
+    numericalSerie: p.numericalSeriePrefix ? { prefix: p.numericalSeriePrefix } : undefined,
+    accountAssignment: p.accountAssignmentCode ? { shortCut: p.accountAssignmentCode } : undefined,
+    vatClassification: p.vatClassificationCode ? { shortCut: p.vatClassificationCode } : undefined,
+  };
+}
+
 export const definitionParam = (fallback: string) =>
   z.string().default(fallback).describe("XML transfer definition shortcut configured in Money S3");
 

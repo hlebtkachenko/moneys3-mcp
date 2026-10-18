@@ -15,7 +15,9 @@ import {
   listTool,
   partnerInput,
   partnerSchema,
+  postingInput,
   runMutation,
+  seriesParams,
   str,
   textResult,
   anyOf,
@@ -50,6 +52,7 @@ type Slip = {
   costCenterCode?: string;
   projectCode?: string;
   activityCode?: string;
+  numericalSeriePrefix?: string;
 };
 
 const slipInput = (p: Slip) => ({
@@ -59,6 +62,7 @@ const slipInput = (p: Slip) => ({
   variableSymbol: p.variableSymbol,
   partnerAddress: partnerInput(p.partner),
   ...controllingInput(p),
+  ...postingInput(p),
 });
 
 // StockTakingDocumentInput requires both IDs (docs/schema.graphql), although
@@ -215,6 +219,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     "Create a received stock slip (příjemka) with stock items. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
       ...slipFields,
+      ...seriesParams,
       documentNumber: z.string().optional(),
       items: z
         .array(

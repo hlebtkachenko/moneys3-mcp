@@ -16,7 +16,7 @@ Money S3 with the **API module** installed and configured:
 2. API extension module purchased in Money S3
 3. API Key generated: **Tools → XML Data Exchange → API Keys → Add & Generate**
 4. App ID obtained from [money.cz/navod/api-v-money-s3-pro-vyvojare](https://money.cz/navod/api-v-money-s3-pro-vyvojare/)
-5. (Recommended) S3 Automatic task `S3Api – XML import queue` added for auto-processing writes
+5. S3 Automatic task `S3Api – fronta XML importu` (S3Api – XML import queue) added: **Tools → S3 Automatic → Add task**. Required for writes: without it every write stays `UNPROCESSED`. One task serves all agendas and starts by itself when the queue has work.
 
 ## Installation
 
@@ -329,6 +329,7 @@ Layout and design: [ARCHITECTURE.md](ARCHITECTURE.md). Contributor rules: [AGENT
 
 - Write operations are **asynchronous**: data goes to the import queue and is processed by S3 Automatic. Check the outcome with `m3_import_status`.
 - `definitionShortcut` names an XML transfer definition configured in your Money S3; defaults are the standard definitions of a Money S3 26.900 agenda (`_FP+FV`, `_ADR`, `_KK`, `_S`, `_INVD`, `_BD`, `_PD`, `_ID`, `_PH+ZV`, `_ZAK`, `_STR`, `_CIN`, `_UCOSN+POH`, `_PREDK`, `_MZDY`).
+- Creates of invoices, liabilities, receivables, internal, bank, cash desk and stock documents take `numericalSeriePrefix` (see `m3_numerical_series`). All but stock documents also take `accountAssignmentCode` (předkontace, see `m3_predefined_entries`) and `vatClassificationCode` (členění DPH, see `m3_vat_classifications`); invoices and liabilities take `paymentAccountCode` (bank account or cash box, see `m3_bank_accounts`). When omitted, the XML definition's presets apply. The standard definitions of a fresh agenda may have none: Money S3 then rejects the import (no series; an invoice or liability without a payment account; a předkontace without a VAT classification) or saves the document unposted (no předkontace).
 - Some deletes fail if the record has dependent records (e.g. a received invoice whose goods were already dispatched).
 - The API service must be running on the Money S3 PC. If requests fail with 502/503, check the S3Api Windows service.
 - Questions about the API can be directed to [api@money.cz](mailto:api@money.cz).

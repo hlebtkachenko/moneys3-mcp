@@ -14,7 +14,11 @@ import {
   listTool,
   partnerInput,
   partnerSchema,
+  paymentAccountParams,
+  postingInput,
+  postingParams,
   runMutation,
+  seriesParams,
   str,
   updateTool,
   vatText,
@@ -80,6 +84,7 @@ const documentFields = {
   variableSymbol: z.string().optional(),
   partner: partnerSchema.optional(),
   ...controllingParams,
+  ...postingParams,
 };
 
 const documentParams = { ...documentFields, documentNumber: z.string().optional() };
@@ -87,13 +92,14 @@ const documentParams = { ...documentFields, documentNumber: z.string().optional(
 const receivableLiabilityFields = {
   dateOfIssue: dateParam("Issue date"),
   dateOfAccountingEvent: dateParam("Accounting event date").optional(),
+  dateOfTaxing: dateParam("VAT date (DUZP)").optional(),
   dateOfMaturity: dateParam("Maturity date").optional(),
   constantSymbol: z.string().optional(),
   specificSymbol: z.string().optional(),
   ...documentFields,
 };
 
-const receivableLiabilityParams = { ...receivableLiabilityFields, documentNumber: z.string().optional() };
+const receivableLiabilityParams = { ...receivableLiabilityFields, ...seriesParams, documentNumber: z.string().optional() };
 
 const internalFields = {
   dateOfAccountingEvent: dateParam("Date of accounting event"),
@@ -114,6 +120,7 @@ const internalInput = (p: Internal) => ({
   variableSymbol: p.variableSymbol,
   partnerAddress: partnerInput(p.partner),
   ...controllingInput(p),
+  ...postingInput(p),
 });
 
 // Updates do not offer partner: a partial one would land as an unidentified address.
@@ -133,6 +140,7 @@ const documentKey = (what: string) => ({
 type ReceivableLiability = {
   dateOfIssue?: string;
   dateOfAccountingEvent?: string;
+  dateOfTaxing?: string;
   dateOfMaturity?: string;
   documentNumber?: string;
   description?: string;
@@ -143,12 +151,17 @@ type ReceivableLiability = {
   costCenterCode?: string;
   projectCode?: string;
   activityCode?: string;
+  numericalSeriePrefix?: string;
+  accountAssignmentCode?: string;
+  vatClassificationCode?: string;
+  paymentAccountCode?: string;
 };
 
 function receivableLiabilityInput(p: ReceivableLiability) {
   return {
     dateOfIssue: isoDate(p.dateOfIssue),
     dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
+    dateOfTaxing: isoDate(p.dateOfTaxing),
     dateOfMaturity: isoDate(p.dateOfMaturity),
     documentNumber: p.documentNumber,
     description: p.description,
@@ -157,6 +170,9 @@ function receivableLiabilityInput(p: ReceivableLiability) {
     specificSymbol: p.specificSymbol,
     partnerAddress: partnerInput(p.partner),
     ...controllingInput(p),
+    ...postingInput(p),
+    // Only liabilities have payFrom; receivable tools do not offer the parameter.
+    payFrom: p.paymentAccountCode ? { shortCut: p.paymentAccountCode } : undefined,
   };
 }
 
@@ -204,7 +220,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_internal_document",
     "Create an internal document. Written to the Money S3 import queue; check the result with m3_import_status.",
-    { ...internalFields, documentNumber: z.string().optional(), definitionShortcut: definitionParam("_ID") },
+    { ...internalFields, ...seriesParams, documentNumber: z.string().optional(), definitionShortcut: definitionParam("_ID") },
     CREATE,
     async (p) =>
       runMutation(m3, {
@@ -234,7 +250,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_liability",
     "Create a liability (závazek). Written to the Money S3 import queue; check the result with m3_import_status.",
-    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_PH+ZV") },
+    { ...receivableLiabilityParams, ...paymentAccountParams, definitionShortcut: definitionParam("_PH+ZV") },
     CREATE,
     async (p) =>
       runMutation(m3, {
@@ -268,7 +284,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
       name: `m3_update_${kind}`,
       what: `a ${kind}'s header`,
       match: documentKey(kind),
-      fields: receivableLiabilityUpdateFields,
+      fields: kind === "liability" ? { ...receivableLiabilityUpdateFields, ...paymentAccountParams } : receivableLiabilityUpdateFields,
       definition: "_PH+ZV",
       lookup: { root: kind === "liability" ? "liabilities" : "receivables", where: documentWhere, unique: true, deleted: true },
       mutation: `update${Kind}`,

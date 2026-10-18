@@ -261,6 +261,50 @@ test("finding 10: invoice creates send the partner", async () => {
   assert.deepEqual(validate(last()).errors, []);
 });
 
+test("document creates send series, předkontace, VAT classification and payment account", async () => {
+  await call("m3_create_issued_invoice", {
+    dateOfIssue: "2026-03-02", dateOfTaxing: "2026-03-02", dateOfMaturity: "2026-03-16",
+    numericalSeriePrefix: "FVrr", accountAssignmentCode: "FV001", vatClassificationCode: "19Ř01,02", paymentAccountCode: "BAN",
+    items: [{ description: "Service", amount: 1, unitPriceHc: 100 }],
+  });
+  let input = sentInput();
+  assert.deepEqual(
+    [input.numericalSerie, input.accountAssignment, input.vatClassification, input.payOn, input.payFrom],
+    [{ prefix: "FVrr" }, { shortCut: "FV001" }, { shortCut: "19Ř01,02" }, { shortCut: "BAN" }, undefined],
+  );
+  assert.deepEqual(validate(last()).errors, []);
+
+  // [tool, args, field that carries the payment account or null]
+  for (const [name, args, pay] of [
+    ["m3_create_received_invoice", { dateOfIssue: "2026-03-02", dateOfTaxing: "2026-03-02", dateOfMaturity: "2026-03-16", items: [{ description: "Goods", amount: 1, unitPriceHc: 1 }] }, "payFrom"],
+    ["m3_create_liability", { dateOfIssue: "2026-03-02" }, "payFrom"],
+    ["m3_create_receivable", { dateOfIssue: "2026-03-02" }, null],
+    ["m3_create_internal_document", { dateOfAccountingEvent: "2026-03-02" }, null],
+    ["m3_create_bank_document", { dateOfIssue: "2026-03-02" }, null],
+    ["m3_create_cash_desk_document", { dateOfIssue: "2026-03-02" }, null],
+  ]) {
+    const r = await call(name, { ...args, numericalSeriePrefix: "XXrr", accountAssignmentCode: "PK1", vatClassificationCode: "V1", paymentAccountCode: "BAN" });
+    assert.ok(!r.isError, `${name}: ${text(r)}`);
+    input = sentInput();
+    assert.deepEqual([input.numericalSerie, input.accountAssignment, input.vatClassification], [{ prefix: "XXrr" }, { shortCut: "PK1" }, { shortCut: "V1" }], name);
+    assert.deepEqual([input.payFrom, input.payOn], [pay ? { shortCut: "BAN" } : undefined, undefined], name);
+    assert.deepEqual(validate(last()).errors, [], name);
+  }
+
+  await call("m3_update_issued_invoice", { documentNumber: "FV1", accountAssignmentCode: "FV002", paymentAccountCode: "POK" });
+  assert.deepEqual(sentInput(), { documentNumber: "FV1", accountAssignment: { shortCut: "FV002" }, payOn: { shortCut: "POK" } });
+  await call("m3_update_received_invoice", { documentNumber: "FP1", paymentAccountCode: "POK" });
+  assert.deepEqual(sentInput(), { documentNumber: "FP1", payFrom: { shortCut: "POK" } });
+  const params = (name) => Object.keys(tools.find((t) => t.name === name).inputSchema.properties);
+  assert.ok(params("m3_update_liability").includes("paymentAccountCode"));
+  assert.ok(!params("m3_update_receivable").includes("paymentAccountCode"));
+  assert.ok(!params("m3_update_liability").includes("numericalSeriePrefix"));
+
+  await call("m3_create_stock_document", { dateOfIssue: "2026-03-02", numericalSeriePrefix: "PRrr", items: [{ catalogue: "SKU-1", warehouseCode: "HL", quantity: 1, unitPrice: 1 }] });
+  assert.deepEqual(sentInput().numericalSerie, { prefix: "PRrr" });
+  assert.deepEqual(validate(last()).errors, []);
+});
+
 test("finding 11: collection and field names follow the official examples", async () => {
   await call("m3_inventory_documents", {});
   assert.deepEqual(rootOf(last()), ["stockTakingDocuments"]);

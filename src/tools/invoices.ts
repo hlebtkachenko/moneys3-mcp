@@ -16,7 +16,11 @@ import {
   listTool,
   partnerInput,
   partnerSchema,
+  paymentAccountParams,
+  postingInput,
+  postingParams,
   runMutation,
+  seriesParams,
   str,
   updateTool,
   vatText,
@@ -87,7 +91,9 @@ const headerParams = {
   dateOfTaxing: dateParam("VAT date (DUZP)"),
   dateOfMaturity: dateParam("Maturity date"),
   dateOfAccountingEvent: dateParam("Accounting event date").optional(),
-  numericalSeriePrefix: z.string().optional().describe("Numerical series prefix"),
+  ...seriesParams,
+  ...postingParams,
+  ...paymentAccountParams,
   variableSymbol: z.string().optional(),
   description: z.string().optional(),
   partner: partnerSchema.optional(),
@@ -111,6 +117,9 @@ type CreateParams = {
   dateOfAccountingEvent?: string;
   documentNumber?: string;
   numericalSeriePrefix?: string;
+  accountAssignmentCode?: string;
+  vatClassificationCode?: string;
+  paymentAccountCode?: string;
   variableSymbol?: string;
   description?: string;
   partner?: z.infer<typeof partnerSchema>;
@@ -120,14 +129,16 @@ type CreateParams = {
   items: z.infer<typeof itemSchema>[];
 };
 
-function invoiceInput(p: Partial<CreateParams>) {
+// Issued invoices are paid to an account (payOn), received ones from it (payFrom).
+function invoiceInput(p: Partial<CreateParams>, pay: "payOn" | "payFrom") {
   return {
     dateOfIssue: isoDate(p.dateOfIssue),
     dateOfTaxing: isoDate(p.dateOfTaxing),
     dateOfMaturity: isoDate(p.dateOfMaturity),
     dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
     documentNumber: p.documentNumber,
-    numericalSerie: p.numericalSeriePrefix ? { prefix: p.numericalSeriePrefix } : undefined,
+    ...postingInput(p),
+    [pay]: p.paymentAccountCode ? { shortCut: p.paymentAccountCode } : undefined,
     variableSymbol: p.variableSymbol,
     description: p.description,
     partnerAddress: partnerInput(p.partner),
@@ -169,7 +180,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
         label: "Issued invoice",
         verifyWith: "m3_issued_invoices",
         definitionShortcut: p.definitionShortcut,
-        input: { ...invoiceInput(p), isCreditNote: p.isCreditNote },
+        input: { ...invoiceInput(p, "payOn"), isCreditNote: p.isCreditNote },
       }),
   );
 
@@ -186,7 +197,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
         label: "Received invoice",
         verifyWith: "m3_received_invoices",
         definitionShortcut: p.definitionShortcut,
-        input: invoiceInput(p),
+        input: invoiceInput(p, "payFrom"),
       }),
   );
 
@@ -203,7 +214,7 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
       arg: `${type}Invoice`,
       verifyWith: `m3_${type}_invoices`,
       label: (p) => `Update ${type} invoice "${p.documentNumber}"`,
-      input: (p) => ({ ...invoiceInput(p as Partial<CreateParams>), documentNumber: p.documentNumber as string }),
+      input: (p) => ({ ...invoiceInput(p as Partial<CreateParams>, type === "issued" ? "payOn" : "payFrom"), documentNumber: p.documentNumber as string }),
     });
   }
 
