@@ -1,8 +1,8 @@
 # Changelog
 
-## [3.0.0] - 2026-10-18
+## [2.1.0] - 2026-10-18
 
-### Breaking
+### Changed
 - `m3_flags` removed: the API has no flags query (flags exist only as `flagLinks` on documents).
 - `m3_create_inventory_document` requires `stockTakingId` and `stockTakingDocumentId` (required by `StockTakingDocumentInput`).
 - `m3_create_account` and `m3_create_predefined_entry` take the schema's enum values (`type` of an account is `BALANCE_SHEET`, `PROFIT_LOSS`, `FINAL` or `OFF_BALANCE_SHEET`); other enum names are refused.
