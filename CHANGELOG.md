@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.2] - 2026-10-18
+
+### Fixed
+- Invoices and liabilities take `paymentAccountCode` (issued invoices: `payOn`; received invoices and liabilities: `payFrom`). With standard definitions that preset no account, Money S3 rejected every one ("musíte uvést zkratku účtu nebo pokladny", -37120 / -35500). Found and verified in a live test on a demo agenda.
+- Liabilities and receivables take `dateOfTaxing` (VAT date); Money S3 asks for it on liabilities.
+
+### Added
+- `numericalSeriePrefix` on creates of liabilities, receivables, internal, bank, cash desk and stock documents (invoices had it); without a preset series Money S3 rejects the import (-50001).
+- `accountAssignmentCode` (předkontace) and `vatClassificationCode` (členění DPH) on create and update of invoices, liabilities, receivables, internal, bank and cash desk documents. An issued invoice with a předkontace but no VAT classification was rejected (-37094).
+
+### Changed
+- README: the S3 Automatic task `S3Api – fronta XML importu` is required for writes, not recommended.
+
 ## [2.1.1] - 2026-10-18
 
 ### Fixed
