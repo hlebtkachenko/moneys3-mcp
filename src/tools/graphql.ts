@@ -4,6 +4,7 @@ import { MoneyS3Client } from "../moneys3-client.js";
 import { RAW, READ, errorResult, listParams, listTool, str, textResult } from "./helpers.js";
 
 const OUTPUT_LIMIT = 50_000;
+const LIMIT_TEXT = "50,000 characters";
 
 /**
  * Keeps m3_graphql output valid JSON under OUTPUT_LIMIT: pretty if it fits,
@@ -17,26 +18,29 @@ function fitResult(data: unknown) {
   // GraphQL data is always an object keyed by root field.
   const trimmed = structuredClone(data) as Record<string, { items?: unknown[] } | null>;
   const notes: string[] = [];
+  let emptied = false;
   let size = compact.length;
   for (const [root, conn] of Object.entries(trimmed).reverse()) {
     const items = Array.isArray(conn?.items) ? conn.items : [];
     const returned = items.length;
     while (size > OUTPUT_LIMIT && items.length) size -= JSON.stringify(items.pop()).length + 1;
     if (items.length < returned) {
+      emptied ||= items.length === 0;
       notes.push(`${root}: first ${items.length} of ${returned} returned items shown; fetch the rest with a smaller take and a higher skip`);
     }
   }
   const json = JSON.stringify(trimmed);
-  if (notes.length && json.length <= OUTPUT_LIMIT) {
+  // A list trimmed to nothing helps no one: one record alone is over the limit.
+  if (notes.length && !emptied && json.length <= OUTPUT_LIMIT) {
     return {
       content: [
         { type: "text" as const, text: json },
-        { type: "text" as const, text: `Output over ${OUTPUT_LIMIT / 1000} KB, trimmed to whole records. ${notes.join("; ")}.` },
+        { type: "text" as const, text: `Output over ${LIMIT_TEXT}, trimmed to whole records. ${notes.join("; ")}.` },
       ],
     };
   }
-  return textResult(
-    `Result is ${Math.round(compact.length / 1000)} KB, over the ${OUTPUT_LIMIT / 1000} KB output limit, and cannot be trimmed to whole records. ` +
+  return errorResult(
+    `Result is ${compact.length.toLocaleString("en")} characters, over the ${LIMIT_TEXT} output limit, and cannot be trimmed to whole records. ` +
       `Top-level fields: ${Object.keys(trimmed).join(", ")}. Narrow the query: select fewer fields, use take/skip, ` +
       "or for introspection ask for one type at a time with __type(name: ...).",
   );
@@ -61,8 +65,8 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
 
   server.tool(
     "m3_import_status",
-    "Check how Money S3 processed a queued write. Pass the import GUID returned by any m3_create_* or m3_delete_* tool. Read-only.",
-    { guid: z.guid().describe("Import GUID returned by a create/delete tool") },
+    "Check how Money S3 processed a queued write. Pass the import GUID returned by any m3_create_*, m3_update_* or m3_delete_* tool. Read-only.",
+    { guid: z.guid().describe("Import GUID returned by a create, update or delete tool") },
     READ,
     // Shape from money.cz's output-message examples (vystupni_zpravy_priklady.pdf):
     // importStatus(importGuid) { guid state stateInfo }. The state values are not

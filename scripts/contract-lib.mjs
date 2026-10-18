@@ -88,14 +88,24 @@ function sample(schema, key = "", requiredOnly = false) {
 
 /**
  * Every call the contract check makes for a tool: all fields, required fields
- * only, and all fields once per further value of each top-level enum argument
- * (so m3_orders also sends issuedOrders, m3_code_lists every list).
+ * only, all fields once per further value of each top-level enum argument
+ * (so m3_orders also sends issuedOrders, m3_code_lists every list), and for
+ * update tools the key plus each changeable field on its own.
  */
 export function callsFor(tool) {
   const full = argsFor(tool);
   const calls = [{ label: "full", args: full, requiredOnly: false }, { label: "required", args: argsFor(tool, true), requiredOnly: true }];
-  for (const [key, prop] of Object.entries(tool.inputSchema.properties ?? {})) {
+  const props = Object.entries(tool.inputSchema.properties ?? {});
+  for (const [key, prop] of props) {
     for (const value of (prop.enum ?? []).slice(1)) calls.push({ label: `${key}=${value}`, args: { ...full, [key]: value }, requiredOnly: false });
+  }
+  // Updates: the key (required fields and those described as a key) plus one changed field at a time.
+  if (tool.name.startsWith("m3_update_")) {
+    const isKey = (key, prop) => tool.inputSchema.required?.includes(key) || /\(key\b/.test(prop.description ?? "");
+    const base = Object.fromEntries(props.filter(([k, p]) => isKey(k, p)).map(([k]) => [k, full[k]]));
+    for (const [key, prop] of props) {
+      if (!isKey(key, prop) && key !== "definitionShortcut") calls.push({ label: `+${key}`, args: { ...base, [key]: full[key] }, requiredOnly: false });
+    }
   }
   return calls;
 }

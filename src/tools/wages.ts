@@ -39,7 +39,7 @@ export function registerWageTools(server: McpServer, m3: MoneyS3Client) {
         mutation: "createWage",
         arg: "wage",
         label: `Wage for employee "${personalNumber}" (${month}/${year})`,
-        verifyWith: "m3_employees",
+        verifyWith: "the wage in Money S3 (the API has no wage query)",
         definitionShortcut,
         input: { employee: { personalNumber }, month, year, employmentRelationships },
       }),
@@ -54,7 +54,7 @@ export function registerWageTools(server: McpServer, m3: MoneyS3Client) {
     definition: "_MZDY",
     mutation: "updateWage",
     arg: "wage",
-    verifyWith: "m3_employees",
+    verifyWith: "the wage in Money S3 (the API has no wage query)",
     label: (p) => `Update wage for employee "${p.personalNumber}" (${p.month}/${p.year})`,
     input: (p) => ({
       employee: { personalNumber: p.personalNumber as string },

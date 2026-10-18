@@ -192,7 +192,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     what: "a stock card (article)",
     key: {
       catalogue: z.string().min(1).describe("Catalogue number of the card to update (key)"),
-      guid: z.guid().optional().describe("Article GUID, when the definition matches on GUID"),
+      guid: z.guid().optional().describe("Article GUID (key, when the definition matches on GUID)"),
     },
     fields: { ...articleFields, description: z.string().min(1).describe("Article name (popis zásoby)") },
     definition: "_zSK",

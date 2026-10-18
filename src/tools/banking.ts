@@ -84,6 +84,9 @@ const paymentFields = {
 
 const paymentParams = { ...paymentFields, documentNumber: z.string().optional() };
 
+// isExpense: false from a client filling optional fields would turn an expense into a receipt.
+const { isExpense: _isExpense, partner: _partner, ...paymentUpdateFields } = paymentFields;
+
 const bankFields = {
   constantSymbol: z.string().optional(),
   specificSymbol: z.string().optional(),
@@ -176,7 +179,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     name: "m3_update_bank_document",
     what: "a bank document's header",
     key: documentKey("bank document"),
-    fields: { ...paymentFields, ...bankFields },
+    fields: { ...paymentUpdateFields, ...bankFields },
     definition: "_BD",
     mutation: "updateBankStatement",
     arg: "bankStatement",
@@ -210,7 +213,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
     name: "m3_update_cash_desk_document",
     what: "a cash desk document's header",
     key: documentKey("cash desk document"),
-    fields: { ...paymentFields, ...cashFields },
+    fields: { ...paymentUpdateFields, ...cashFields },
     definition: "_PD",
     mutation: "updateCashVoucher",
     arg: "cashVoucher",

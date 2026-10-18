@@ -134,7 +134,7 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, updates
 | `m3_set_agenda` | Set the active agenda for subsequent calls |
 | `m3_connection_test` | Test OAuth2, endpoint and agenda access; auto-selects a single agenda |
 | `m3_import_status` | Show how Money S3 processed a queued write (`importStatus` by import GUID) |
-| `m3_graphql` | Raw GraphQL query or mutation (mutations detected by parsing, never cached or retried); output over 50 KB is trimmed to whole records, never cut mid-JSON |
+| `m3_graphql` | Raw GraphQL query or mutation (mutations detected by parsing, never cached or retried); output over 50,000 characters is trimmed to whole records, never cut mid-JSON |
 | `m3_orders` | Received or issued orders (`type: received \| issued`) |
 
 ### Invoices (7 tools)
@@ -170,7 +170,7 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, updates
 | `m3_create_stock_card` | Create an article (catalogue, description, barcode, PLU, weight) |
 | `m3_create_stock_document` | Create a received stock slip with stock items |
 | `m3_create_inventory_document` | Create a stocktaking document with counted items |
-| `m3_update_stock_card` | Update an article by catalogue (or GUID) |
+| `m3_update_stock_card` | Update an article by catalogue |
 | `m3_update_stock_document` | Update a received stock slip's description, title, note and texts |
 | `m3_update_inventory_document` | Update a stocktaking document (counted items) by stocktaking and document ID |
 
@@ -271,7 +271,7 @@ Not covered: wages cannot be read (the API has `createWage`/`updateWage`/`delete
 - **Reading:** GraphQL queries with `take`/`skip` paging and HotChocolate-style `where`/`order` objects. `where` and `order` must each be one GraphQL object (checked before sending).
 - **Deleted records:** Money S3 returns soft-deleted records and does not accept `isDeleted` as a filter. List tools hide them on the current page and say how many were hidden; `totalCount` still counts them.
 - **Writing:** mutations go into Money S3's import queue. A tool reports "queued for import" with an import GUID when `isSuccess` is true and an error when it is false. Check the processing result with `m3_import_status`.
-- **Updating:** update inputs carry no record ID. Money S3 finds the record by the XML transfer definition's key (spojovací klíč): document number for documents, partner code, IČO, bank account or GUID for addresses, catalogue, barcode, GUID or PLU for stock cards, the shortcut for code lists. The definition must update existing records (Money S3's default since 24.900). Update tools send only the key and the fields you give and refuse a call that changes nothing. Documents with stock items or links to other documents take only selected header fields (Seyfor's XML transfer manual), so document updates change headers, not items. Read the record back after the import.
+- **Updating:** update inputs carry no record ID. Money S3 finds the record by the XML transfer definition's key (spojovací klíč): document number for documents, partner code, IČO, bank account or GUID for addresses, catalogue, barcode, GUID or PLU for stock cards, the shortcut for code lists. The definition must update existing records (Money S3's default since 24.900). Update tools send only the key and the fields you give, and refuse a call that would send nothing but the key or that contains an empty string or list. Document updates send header fields only (no items, no partner); whether Money S3 keeps the existing items is unverified. Documents with stock items or links to other documents take only selected header fields such as the description and texts (Seyfor's XML transfer manual), and documents Money S3 would not let you edit are refused. A key that matches no record may be added as a new record, depending on the definition. Read the record back after the import.
 - **Dates:** create tools accept `YYYY-MM-DD` or `DD.MM.YYYY` and send ISO `YYYY-MM-DD`, as in money.cz's official mutation examples.
 - **Partner:** document creates take a `partner` object (name, street, city, postalCode, countryCode, countryName, identificationNumber, vatIdentificationNumber, email, phone), sent as `partnerAddress`.
 

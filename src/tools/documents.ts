@@ -116,9 +116,13 @@ const internalInput = (p: Internal) => ({
   ...controllingInput(p),
 });
 
+// Updates do not offer partner: a partial one would land as an unidentified address.
+const { partner: _p1, ...internalUpdateFields } = internalFields;
+const { partner: _p2, ...receivableLiabilityUpdateFields } = receivableLiabilityFields;
+
 const documentKey = (what: string) => ({
   documentNumber: z.string().min(1).describe(`Document number of the ${what} to update (key)`),
-  year: z.number().int().min(2000).max(2100).optional().describe("Accounting year of the document"),
+  year: z.number().int().min(2000).max(2100).optional().describe("Accounting year of the document (key)"),
 });
 
 type ReceivableLiability = {
@@ -212,7 +216,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     name: "m3_update_internal_document",
     what: "an internal document's header",
     key: documentKey("internal document"),
-    fields: internalFields,
+    fields: internalUpdateFields,
     definition: "_ID",
     mutation: "updateInternalDocument",
     arg: "internalDocument",
@@ -258,7 +262,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
       name: `m3_update_${kind}`,
       what: `a ${kind}'s header`,
       key: documentKey(kind),
-      fields: receivableLiabilityFields,
+      fields: receivableLiabilityUpdateFields,
       definition: def,
       mutation: `update${Kind}`,
       arg: kind,

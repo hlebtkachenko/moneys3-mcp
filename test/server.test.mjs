@@ -317,8 +317,12 @@ test("m3_graphql never cuts JSON: large lists drop whole records and say so", as
 
   fake.respond = () => Response.json({ data: { __schema: { types: Array.from({ length: 3000 }, (_, i) => ({ name: `Type${i}`, kind: "OBJECT" })) } } });
   const big = await call("m3_graphql", { query: "{ __schema { types { name kind } } }" });
-  assert.equal(big.content.length, 1);
-  assert.match(text(big), /over the 50 KB output limit.*__type\(name/s);
+  assert.ok(big.isError);
+  assert.match(text(big), /over the 50,000 characters output limit.*__type\(name/s);
+
+  fake.respond = () => Response.json({ data: { centres: { items: [{ note: "x".repeat(60_000) }], totalCount: 1 } } });
+  const one = await call("m3_graphql", { query: "{ centres(take: 1) { items { note } totalCount } }" });
+  assert.ok(one.isError, "a single record over the limit is not trimmed to an empty list");
 });
 
 test("update tools send only the key and the changed fields, refuse key-only calls and are never retried", async () => {
@@ -337,6 +341,24 @@ test("update tools send only the key and the changed fields, refuse key-only cal
   assert.match(text(noKey), /guid, code or identificationNumber/);
   assert.equal(fake.requests.length, 0);
 
+  // Values the mappers drop, empty strings and lists, and IČO alone never reach Money S3.
+  for (const [name, args] of [
+    ["m3_update_issued_invoice", { documentNumber: "FV1", costCenterCode: "" }],
+    ["m3_update_issued_invoice", { documentNumber: "FV1", description: "" }],
+    ["m3_update_inventory_document", { stockTakingId: 1, stockTakingDocumentId: 1, items: [] }],
+    ["m3_update_address", { identificationNumber: "12345678" }],
+    ["m3_update_address", { guid: "00000000-0000-4000-8000-000000000001", street: "" }],
+  ]) {
+    const refused = await call(name, args);
+    assert.ok(refused.isError, `${name} ${JSON.stringify(args)}: ${text(refused)}`);
+  }
+  assert.equal(fake.requests.length, 0);
+  const params = (name) => Object.keys(tools.find((t) => t.name === name).inputSchema.properties);
+  assert.ok(!params("m3_update_bank_document").includes("isExpense") && !params("m3_update_issued_invoice").includes("isCreditNote"));
+  assert.ok(!params("m3_update_liability").includes("partner") && !params("m3_update_cash_desk_document").includes("partner"));
+
+  await call("m3_update_address", { code: "P1", discount: 0, creditLimit: 0 });
+  assert.deepEqual(sentInput(), { code: "P1", discount: 0, isDiscount: false, creditValue: 0, isCredit: false });
   await call("m3_update_address", { identificationNumber: "12345678", email: "info@example.com" });
   assert.deepEqual(sentInput(), { identificationNumber: "12345678", email: "info@example.com" });
   await call("m3_update_stock_document", { documentNumber: "PR001", description: "Synthetic" });

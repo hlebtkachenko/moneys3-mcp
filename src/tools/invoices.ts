@@ -94,6 +94,10 @@ const headerParams = {
   ...controllingParams,
 };
 
+// A partial partner would land as an address Money S3 cannot identify; the
+// credit-note flag is not a header correction. Neither is offered on update.
+const { partner: _partner, ...headerUpdateFields } = headerParams;
+
 const createParams = {
   ...headerParams,
   documentNumber: z.string().optional().describe("Document number (numbered by the series if omitted)"),
@@ -190,15 +194,15 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     const Type = type === "issued" ? "Issued" : "Received";
     updateTool(server, m3, {
       name: `m3_update_${type}_invoice`,
-      what: `${type === "issued" ? "an issued" : "a received"} invoice's header (items are not changed)`,
+      what: `${type === "issued" ? "an issued" : "a received"} invoice's header (items and partner are not sent)`,
       key: { documentNumber: z.string().min(1).describe("Document number of the invoice to update (key)") },
-      fields: type === "issued" ? { ...headerParams, isCreditNote: z.boolean().describe("Credit note (dobropis)") } : headerParams,
+      fields: headerUpdateFields,
       definition: "_FP+FV",
       mutation: `update${Type}Invoice`,
       arg: `${type}Invoice`,
       verifyWith: `m3_${type}_invoices`,
       label: (p) => `Update ${type} invoice "${p.documentNumber}"`,
-      input: (p) => ({ ...invoiceInput(p as Partial<CreateParams>), documentNumber: p.documentNumber as string, isCreditNote: p.isCreditNote as boolean | undefined }),
+      input: (p) => ({ ...invoiceInput(p as Partial<CreateParams>), documentNumber: p.documentNumber as string }),
     });
   }
 

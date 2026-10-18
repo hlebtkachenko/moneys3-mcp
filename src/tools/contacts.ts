@@ -97,13 +97,14 @@ function addressBookInput(p: AddressBook): GqlInput {
     accountNumber: p.bankAccountNumber,
     bankCode: p.bankCode,
     discount: p.discount,
-    isDiscount: p.discount != null ? true : undefined,
+    // Each flag follows its value: 0 switches the term off.
+    isDiscount: p.discount != null ? p.discount > 0 : undefined,
     creditValue: p.creditLimit,
-    isCredit: p.creditLimit != null ? true : undefined,
+    isCredit: p.creditLimit != null ? p.creditLimit > 0 : undefined,
     maturityReceivablesDays: p.maturityDaysReceivable,
-    isMaturityReceivables: p.maturityDaysReceivable != null ? true : undefined,
+    isMaturityReceivables: p.maturityDaysReceivable != null ? p.maturityDaysReceivable > 0 : undefined,
     maturityLiabilitiesDays: p.maturityDaysPayable,
-    isMaturityLiabilities: p.maturityDaysPayable != null ? true : undefined,
+    isMaturityLiabilities: p.maturityDaysPayable != null ? p.maturityDaysPayable > 0 : undefined,
   };
 }
 
@@ -137,15 +138,21 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
     name: "m3_update_address",
     what: "an address book entry, found by GUID, partner code or IČO (whichever the definition uses as key)",
     key: {
-      guid: z.guid().optional().describe("Address GUID (see m3_address_book)"),
-      code: z.string().min(1).optional().describe("Partner code (kód partnera)"),
+      guid: z.guid().optional().describe("Address GUID (key, see m3_address_book)"),
+      code: z.string().min(1).optional().describe("Partner code (key, kód partnera)"),
     },
     fields: { ...addressFields, name: z.string().min(1).describe("Company or person name") },
     definition: "_AD",
     mutation: "updateCompany",
     arg: "company",
     verifyWith: "m3_address_book",
-    check: (p) => (p.guid || p.code || p.identificationNumber ? undefined : "give guid, code or identificationNumber to find the address"),
+    check: (p) => {
+      if (p.guid || p.code) return undefined;
+      if (!p.identificationNumber) return "give guid, code or identificationNumber to find the address";
+      // With IČO as the key, the IČO alone changes nothing.
+      const changed = Object.keys(p).filter((k) => p[k] !== undefined && !["identificationNumber", "definitionShortcut"].includes(k));
+      return changed.length ? undefined : "with identificationNumber as the key, give another field to change";
+    },
     label: (p) => `Update address "${p.guid ?? p.code ?? p.identificationNumber}"`,
     input: (p) => ({ guid: p.guid as string | undefined, code: p.code as string | undefined, ...(addressBookInput(p as AddressBook) as object) }),
   });

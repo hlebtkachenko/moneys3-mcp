@@ -289,9 +289,23 @@ export async function listTool(
 const UPDATE_NOTE =
   "Goes through the Money S3 import queue like a create. Money S3 finds the existing record by its key (the XML transfer " +
   "definition's spojovací klíč, by default the field marked as the key here) and updates it only if the definition updates " +
-  "existing records (the default since Money S3 24.900); otherwise the record may be skipped or added. Only the fields you " +
-  "give are sent, but Money S3 may fill missing fields from the definition's presets, and documents with stock items or " +
-  "links to other documents take only selected header fields. Read the record back after m3_import_status reports it imported.";
+  "existing records (the default since Money S3 24.900); a key that matches nothing may be skipped or added as a new record. " +
+  "Only the fields you give are sent (leave a field out to keep it; empty strings and lists are refused), but Money S3 may " +
+  "fill missing fields from the definition's presets. Documents with stock items or links to other documents take only " +
+  "selected header fields, and documents Money S3 would not let you edit (locked period, paid) are refused. Read the record " +
+  "back after m3_import_status reports it imported.";
+
+/** Dotted path of the first empty string or empty list in the arguments, if any. */
+function findBlank(value: unknown, path = ""): string | undefined {
+  if (value === "" || (Array.isArray(value) && !value.length)) return path || "value";
+  if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) {
+      const found = findBlank(v, path ? `${path}.${k}` : k);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
 
 interface UpdateSpec {
   name: string;
@@ -314,15 +328,21 @@ interface UpdateSpec {
 /** Registers an update tool: required key, every other field optional, never retried (runMutation). */
 export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpec) {
   const fields = z.object(spec.fields).partial().shape;
+  if (Object.keys(z.object(fields).parse({})).length) throw new Error(`${spec.name}: update fields must not have defaults`);
   server.tool(
     spec.name,
     `Update ${spec.what}. ${UPDATE_NOTE}`,
     { ...spec.key, ...fields, definitionShortcut: definitionParam(spec.definition) },
     UPDATE,
     async (p: Record<string, unknown>) => {
+      const blank = findBlank(p);
+      const input = spec.input(p);
+      // Compare what would be sent, not the arguments: mappers drop some values.
+      const keyOnly = spec.input(Object.fromEntries(Object.keys(spec.key).map((k) => [k, p[k]])));
       const problem =
-        spec.check?.(p) ??
-        (Object.keys(spec.fields).some((k) => p[k] !== undefined) ? undefined : `give at least one field to change besides ${Object.keys(spec.key).join(", ")}`);
+        (blank && `${blank} is empty; leave a field out to keep it`) ||
+        spec.check?.(p) ||
+        (gqlValue(input) === gqlValue(keyOnly) && `give at least one field to change besides ${Object.keys(spec.key).join(", ")}`);
       if (problem) return errorResult(`${spec.name}: ${problem}.`);
       return runMutation(m3, {
         mutation: spec.mutation,
@@ -330,7 +350,7 @@ export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpe
         label: spec.label(p),
         verifyWith: spec.verifyWith,
         definitionShortcut: p.definitionShortcut as string,
-        input: spec.input(p),
+        input,
       });
     },
   );
