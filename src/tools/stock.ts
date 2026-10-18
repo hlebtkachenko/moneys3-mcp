@@ -18,6 +18,7 @@ import {
   runMutation,
   str,
   textResult,
+  anyOf,
   updateTool,
   type GqlInput,
 } from "./helpers.js";
@@ -198,7 +199,8 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
     definition: "_KK",
     lookup: {
       root: "articles",
-      where: (p) => ({ catalogue: { eq: p.catalogue as string }, guid: p.guid ? { eq: p.guid as string } : undefined }),
+      // Catalogue, GUID, barcode and PLU are all possible keys and need not be unique: all sent must hit one record.
+      where: (p) => anyOf([["catalogue", p.catalogue], ["guid", p.guid], ["barCode", p.barCode], ["plu", p.plu]]),
       unique: true,
     },
     mutation: "updateArticle",

@@ -288,17 +288,18 @@ export async function listTool(
 
 const UPDATE_NOTE =
   "Goes through the Money S3 import queue like a create. Before sending, the tool reads the record by its key and refuses " +
-  "if none matches (or, for documents, addresses and stock cards, more than one). Money S3 then finds the record by the " +
-  "XML transfer definition's key (spojovací klíč). The default definition is a dedicated update definition (UPD plus the " +
-  "standard shortcut) that must exist in Money S3 with new records and records without a key set to error, so a miss " +
-  "cannot create a record. Only the fields you give are sent (leave a field out to keep it; empty strings and lists are " +
-  "refused), but Money S3 may fill missing fields from the definition's presets. Documents with stock items or links to " +
-  "other documents take only selected header fields, and documents Money S3 would not let you edit (locked period, paid) " +
-  "are refused. Read the record back after m3_import_status reports it imported.";
+  "if none matches (deleted records do not count where the API shows them) or, for documents, addresses, stock cards and " +
+  "stocktaking documents, if more than one does. Money S3 then finds the record by the XML transfer definition's key " +
+  "(spojovací klíč). Only update definitions are accepted (UPD plus the standard shortcut), which must exist in Money S3 " +
+  "with new records and records without a key set to error, so a miss cannot create a record. Only the fields you give are " +
+  "sent (leave a field out to keep it; blank strings and empty lists are refused), but Money S3 may fill missing fields from " +
+  "the definition's presets. Documents with stock items or links to other documents take only selected header fields, and " +
+  "Money S3 rejects at import what it would not let you edit (locked document or accounting period). Read the record back " +
+  "after m3_import_status reports it imported.";
 
 /** Dotted path of the first empty string or empty list in the arguments, if any. */
 function findBlank(value: unknown, path: string): string | undefined {
-  if (value === "" || (Array.isArray(value) && !value.length)) return path;
+  if ((typeof value === "string" && !value.trim()) || (Array.isArray(value) && !value.length)) return path;
   if (!value || typeof value !== "object") return undefined;
   return Object.entries(value)
     .map(([k, v]) => findBlank(v, path ? `${path}.${k}` : k))
@@ -334,14 +335,26 @@ interface UpdateSpec {
 }
 
 /** Refusal message when the update's record is not found as required, else undefined. */
-async function lookupProblem(m3: MoneyS3Client, lookup: UpdateSpec["lookup"], p: Record<string, unknown>): Promise<string | undefined> {
-  const where = gqlValue(lookup.where(p));
-  const gql = `{ ${lookup.root}(take: 10, where: ${where}) { items { __typename${lookup.deleted ? " isDeleted" : ""} } totalCount } }`;
+/** Filter matching any of the given fields that has a value (for entities Money S3 may match on several keys). */
+export function anyOf(pairs: Array<[string, unknown]>): GqlInput {
+  return { or: pairs.filter(([, v]) => v !== undefined).map(([k, v]) => ({ [k]: { eq: v as string } })) };
+}
+
+/** Refusal message when the update's record is not found as required, else undefined. */
+async function lookupProblem(spec: UpdateSpec, m3: MoneyS3Client, p: Record<string, unknown>): Promise<string | undefined> {
+  const { root, deleted, unique } = spec.lookup;
+  const where = gqlValue(spec.lookup.where(p));
+  const gql = `{ ${root}(take: 10, where: ${where}) { items { __typename${deleted ? " isDeleted" : ""} } totalCount } }`;
   m3.cache.invalidate(); // a cached page could hide a create or delete made since
-  const data = await m3.query<Record<string, Connection>>(gql);
-  const live = (data[lookup.root]?.items ?? []).filter((item) => !item.isDeleted).length;
-  if (!live) return `no ${lookup.root} record matches ${where}; nothing was sent`;
-  if (lookup.unique && live > 1) return `${live} ${lookup.root} records match ${where}; narrow the key (for example with the year); nothing was sent`;
+  const page = (await m3.query<Record<string, Connection>>(gql))[root];
+  const items = page?.items ?? [];
+  const live = items.filter((item) => !item.isDeleted).length;
+  if (items.length < (page?.totalCount ?? 0) && (unique || !live)) return `could not check every ${root} record matching ${where}; nothing was sent`;
+  if (!live) return `no ${root} record matches ${where}; nothing was sent`;
+  if (unique && live > 1) {
+    const hint = "year" in spec.match ? "add the year" : "the key is ambiguous (duplicates, or one number in several years); correct it in Money S3 or give another key";
+    return `${live} ${root} records match ${where}; ${hint}; nothing was sent`;
+  }
   return undefined;
 }
 
@@ -359,9 +372,12 @@ export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpe
     {
       ...spec.match,
       ...fields,
-      definitionShortcut: definitionParam(`UPD${spec.definition}`).describe(
-        `XML transfer definition for the update: a copy of ${spec.definition} with new records and records without a key set to error`,
-      ),
+      // Only UPD definitions: the create definitions add new records, so a miss would create one.
+      definitionShortcut: z
+        .string()
+        .regex(/^UPD/, "Update tools take only update definitions (shortcut starting with UPD)")
+        .default(`UPD${spec.definition}`)
+        .describe(`XML transfer definition for the update: a copy of ${spec.definition} with new records and records without a key set to error`),
     },
     UPDATE,
     async (p: Record<string, unknown>) => {
@@ -375,7 +391,7 @@ export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpe
         (gqlValue(input) === gqlValue(matchOnly) && `give at least one field to change besides ${matchNames.join(", ")}`);
       if (problem) return errorResult(`${spec.name}: ${problem}.`);
       try {
-        const missing = await lookupProblem(m3, spec.lookup, p);
+        const missing = await lookupProblem(spec, m3, p);
         if (missing) return errorResult(`${spec.name}: ${missing}.`);
       } catch (err) {
         return errorResult(`${spec.name}: could not read the record before updating, nothing was sent: ${(err as Error).message}`);

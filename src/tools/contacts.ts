@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { CREATE, DELETE, READ, type GqlInput, addressInput, definitionParam, listParams, listTool, runMutation, updateTool } from "./helpers.js";
+import { CREATE, DELETE, READ, type GqlInput, addressInput, definitionParam, listParams, listTool, anyOf, runMutation, updateTool } from "./helpers.js";
 
 const ADDRESS_FIELDS = `
     id guid code
@@ -143,11 +143,17 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
     },
     fields: { ...addressFields, name: z.string().min(1).describe("Company or person name") },
     definition: "_ADR",
-    // Find by the key the call gives, in the order the definition would most likely use.
+    // Any field the definition may key on (code, IČO, bank account, GUID) can pick the record, so all of
+    // those sent must point at the same one: an OR filter that finds two records is refused.
     lookup: {
       root: "companies",
       where: (p) =>
-        p.guid ? { guid: { eq: p.guid as string } } : p.code ? { code: { eq: p.code as string } } : { identificationNumber: { eq: p.identificationNumber as string } },
+        anyOf([
+          ["guid", p.guid],
+          ["code", p.code],
+          ["identificationNumber", p.identificationNumber],
+          ["accountNumber", p.bankAccountNumber],
+        ]),
       unique: true,
     },
     mutation: "updateCompany",

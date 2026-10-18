@@ -17,7 +17,7 @@
 - `m3_create_address`: a discount, credit limit or maturity of 0 switches that term off instead of on.
 
 ### Added
-- Update tools read the record by its key before writing and send nothing when no live record matches (or, for documents, addresses, stock cards and stocktaking documents, more than one); they default to dedicated `UPD…` XML definitions that must be set up in Money S3 with new records set to error (README, Update definitions).
+- Update tools read the record by its key before writing and send nothing when no record matches (or, for documents, addresses, stock cards and stocktaking documents, more than one; addresses and stock cards check every key-capable field sent). They accept only `UPD…` XML definitions, which must be set up in Money S3 with new records set to error (README, Update definitions).
 - 17 update tools: invoices (issued, received), address, stock card, stock document, inventory document, bank and cash desk documents, internal document, liability, receivable, cost center, project, activity, account, predefined entry, wage. Same write semantics as creates: never retried, "outcome unknown" on timeout, `isSuccess=false` is an error. A call that would send only the key, or that contains an empty string or list, is refused before sending. Updates do not offer `partner`, `isExpense` or `isCreditNote`.
 - Read tools: `m3_code_lists` (13 code lists), `m3_years`, `m3_exchange_rates`, `m3_vat_accounting`, `m3_stock_takings`; `m3_predefined_entries` gains `ledger: tax` (accountAssignmentTrs), `m3_service_repairs` gains `type: repairs`.
 - `docs/schema.graphql` (live SDL, replaces the hand-written `docs/schema-summary.json`) and `npm run introspect`.

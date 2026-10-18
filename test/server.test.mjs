@@ -414,7 +414,7 @@ test("updates read the record first and send nothing when it is missing, ambiguo
 
   fake.respond = page([{ __typename: "ICompany" }, { __typename: "ICompany" }]);
   const twice = await call("m3_update_address", { identificationNumber: "12345678", email: "info@example.com" });
-  assert.match(text(twice), /2 companies records match.*narrow the key/);
+  assert.match(text(twice), /2 companies records match.*ambiguous/);
   assert.match(fake.requests.at(-1).query, /identificationNumber: \{ eq: "12345678" \}/);
   assert.equal(mutations(), 0);
 
@@ -427,4 +427,48 @@ test("updates read the record first and send nothing when it is missing, ambiguo
   const down = await call("m3_update_liability", { documentNumber: "ZV1", year: 2026, description: "Synthetic" });
   assert.match(text(down), /could not read the record before updating, nothing was sent/);
   assert.equal(mutations(), 1);
+});
+
+test("update lookups filter on every key the mutation sends", async () => {
+  const lookupOf = () => fake.requests.find((r) => !r.query.startsWith("mutation")).query.replace(/\s+/g, " ");
+  const LOOKUPS = [
+    ["m3_update_address", { guid: "00000000-0000-4000-8000-000000000001", code: "P2", email: "a@example.com" },
+      'where: { or: [{ guid: { eq: "00000000-0000-4000-8000-000000000001" } }, { code: { eq: "P2" } }] }'],
+    ["m3_update_address", { code: "P1", identificationNumber: "87654321", bankAccountNumber: "123" },
+      'where: { or: [{ code: { eq: "P1" } }, { identificationNumber: { eq: "87654321" } }, { accountNumber: { eq: "123" } }] }'],
+    ["m3_update_stock_card", { catalogue: "SKU-1", barCode: "859", description: "Synthetic" },
+      'where: { or: [{ catalogue: { eq: "SKU-1" } }, { barCode: { eq: "859" } }] }'],
+    ["m3_update_liability", { documentNumber: "ZV1", year: 2026, description: "Synthetic" },
+      'liabilities(take: 10, where: { documentNumber: { eq: "ZV1" }, year: { eq: 2026 } })'],
+    ["m3_update_wage", { personalNumber: "00001", year: 2026, month: 3, note: "Synthetic" },
+      'employees(take: 10, where: { personalNumber: { eq: "00001" } })'],
+    ["m3_update_inventory_document", { stockTakingId: 4, stockTakingDocumentId: 2, note: "Synthetic" },
+      'where: { stockTakingId: { eq: 4 }, stockTakingDocumentId: { eq: 2 } }'],
+  ];
+  for (const [name, args, where] of LOOKUPS) {
+    fake.requests.length = 0;
+    const r = await call(name, args);
+    assert.ok(!r.isError, `${name}: ${text(r)}`);
+    assert.ok(lookupOf().includes(where), `${name}: ${lookupOf()}`);
+  }
+});
+
+test("updates refuse create definitions, blank text and lookups that cannot see every match", async () => {
+  const create = await call("m3_update_issued_invoice", { documentNumber: "FV1", description: "Synthetic", definitionShortcut: "_FP+FV" });
+  assert.ok(create.isError);
+  assert.match(text(create), /only update definitions/);
+  const blank = await call("m3_update_cost_center", { code: "CC1", name: " " });
+  assert.ok(blank.isError);
+  assert.equal(fake.requests.length, 0);
+
+  fake.respond = (query) =>
+    Response.json({ data: query.startsWith("mutation") ? defaultData(query) : { liabilities: { items: Array(10).fill({ isDeleted: true }), totalCount: 12 } } });
+  const cut = await call("m3_update_liability", { documentNumber: "ZV1", description: "Synthetic" });
+  assert.match(text(cut), /could not check every liabilities record/);
+
+  fake.respond = (query) =>
+    Response.json({ data: query.startsWith("mutation") ? defaultData(query) : { issuedInvoices: { items: [{}, {}], totalCount: 2 } } });
+  const ambiguous = await call("m3_update_issued_invoice", { documentNumber: "FV1", description: "Synthetic" });
+  assert.match(text(ambiguous), /ambiguous.*correct it in Money S3/);
+  assert.equal(fake.requests.filter((r) => r.query.startsWith("mutation")).length, 0);
 });
