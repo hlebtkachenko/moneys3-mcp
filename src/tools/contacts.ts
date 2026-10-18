@@ -120,7 +120,7 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_address",
     "Create an address book entry with business address, banking, credit limit and maturity terms. Written to the Money S3 import queue; check the result with m3_import_status.",
-    { ...addressFields, name: z.string().min(1).describe("Company or person name"), definitionShortcut: definitionParam("_AD") },
+    { ...addressFields, name: z.string().min(1).describe("Company or person name"), definitionShortcut: definitionParam("_ADR") },
     CREATE,
     async (p) =>
       runMutation(m3, {

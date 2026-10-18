@@ -5,9 +5,9 @@ import { CREATE, READ, definitionParam, listTool, runMutation, str, updateTool }
 
 // [read tool, description, root query, title, tool suffix, mutation suffix, argument, default definition]
 const VARIABLES: Array<[string, string, string, string, string, string, string, string]> = [
-  ["m3_cost_centers", "cost centers (střediska)", "centres", "Cost Centers", "cost_center", "Centre", "centre", "_ST"],
-  ["m3_projects", "projects (zakázky)", "jobOrders", "Projects", "project", "JobOrder", "jobOrder", "_ZK"],
-  ["m3_activities", "activities (činnosti)", "operations", "Activities", "activity", "Operation", "operation", "_CN"],
+  ["m3_cost_centers", "cost centers (střediska)", "centres", "Cost Centers", "cost_center", "Centre", "centre", "_STR"],
+  ["m3_projects", "projects (zakázky)", "jobOrders", "Projects", "project", "JobOrder", "jobOrder", "_ZAK"],
+  ["m3_activities", "activities (činnosti)", "operations", "Activities", "activity", "Operation", "operation", "_CIN"],
 ];
 
 export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
@@ -50,8 +50,7 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
       what: `one of the ${what}`,
       match: { code: z.string().min(1).describe("Shortcut code of the record to update (key)") },
       fields: { name: z.string().min(1).describe("Name"), note: z.string().describe("Note") },
-      // Projects import through the standard _ZAK definition (the create default _ZK is from the examples).
-      definition: suffix === "project" ? "_ZAK" : def,
+      definition: def,
       // Code lists exist once per accounting year: one or more matches.
       lookup: { root, where: (p) => ({ shortCut: { eq: p.code as string } }), unique: false },
       mutation: `update${mutation}`,

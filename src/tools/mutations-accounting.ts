@@ -73,7 +73,7 @@ export function registerAccountingMutationTools(server: McpServer, m3: MoneyS3Cl
       account: z.string().min(1).describe("Account number (e.g. '211', '321')"),
       ...z.object(accountFields).partial().shape,
       year,
-      definitionShortcut: definitionParam("_UC"),
+      definitionShortcut: definitionParam("_UCOSN+POH"),
     },
     CREATE,
     async (p) =>
@@ -93,7 +93,7 @@ export function registerAccountingMutationTools(server: McpServer, m3: MoneyS3Cl
     what: "an account in the chart of accounts",
     match: { account: z.string().min(1).describe("Account number to update (key)") },
     fields: accountFields,
-    definition: "_UC",
+    definition: "_UCOSN+POH",
     // Accounts exist once per accounting year: one or more matches.
     lookup: { root: "accountCharts", where: (p) => ({ account: { eq: p.account as string } }), unique: false },
     mutation: "updateAccountChart",
@@ -110,7 +110,7 @@ export function registerAccountingMutationTools(server: McpServer, m3: MoneyS3Cl
       shortCut: z.string().min(1).describe("Predefined entry shortcut code"),
       ...z.object(entryFields).partial().shape,
       year,
-      definitionShortcut: definitionParam("_PK"),
+      definitionShortcut: definitionParam("_PREDK"),
     },
     CREATE,
     async (p) =>
@@ -129,7 +129,7 @@ export function registerAccountingMutationTools(server: McpServer, m3: MoneyS3Cl
     what: "a predefined accounting entry (předkontace)",
     match: { shortCut: z.string().min(1).describe("Shortcut of the entry to update (key)") },
     fields: entryFields,
-    definition: "_PK",
+    definition: "_PREDK",
     lookup: { root: "accountAssignmentAccs", where: (p) => ({ shortCut: { eq: p.shortCut as string } }), unique: false },
     mutation: "updateAccountAssignmentAcc",
     arg: "accountAssignmentAcc",

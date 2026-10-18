@@ -1,6 +1,6 @@
 {
   "name": "moneys3-mcp",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "MCP server for Money S3 accounting: invoices, contacts, stock, banking, payroll via GraphQL",
   "type": "module",
   "main": "dist/index.js",

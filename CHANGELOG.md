@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.1] - 2026-10-18
+
+### Fixed
+- Create tools default to definitions that exist in Money S3 26.900 agendas; the old defaults from money.cz's examples do not: address `_AD` → `_ADR`, stock card `_zSK` → `_KK`, liability `_ZV` and receivable `_PH` → `_PH+ZV`, project `_ZK` → `_ZAK`, cost center `_ST` → `_STR`, activity `_CN` → `_CIN`, account `_UC` → `_UCOSN+POH`, predefined entry `_PK` → `_PREDK`.
+- Update tools for cost centers, activities, accounts and predefined entries default to `UPD_STR`, `UPD_CIN`, `UPD_UCOSN+POH` and `UPD_PREDK` (were `UPD_ST`, `UPD_CN`, `UPD_UC`, `UPD_PK`).
+
 ## [2.1.0] - 2026-10-18
 
 ### Changed

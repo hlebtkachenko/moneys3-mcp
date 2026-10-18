@@ -234,7 +234,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_liability",
     "Create a liability (závazek). Written to the Money S3 import queue; check the result with m3_import_status.",
-    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_ZV") },
+    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_PH+ZV") },
     CREATE,
     async (p) =>
       runMutation(m3, {
@@ -250,7 +250,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_receivable",
     "Create a receivable (pohledávka). Written to the Money S3 import queue; check the result with m3_import_status.",
-    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_PH") },
+    { ...receivableLiabilityParams, definitionShortcut: definitionParam("_PH+ZV") },
     CREATE,
     async (p) =>
       runMutation(m3, {

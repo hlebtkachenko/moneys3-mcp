@@ -173,7 +173,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_stock_card",
     "Create a stock card (article). Written to the Money S3 import queue; check the result with m3_import_status.",
-    { catalogue: z.string().min(1).describe("Catalogue number (katalog)"), ...articleFields, definitionShortcut: definitionParam("_zSK") },
+    { catalogue: z.string().min(1).describe("Catalogue number (katalog)"), ...articleFields, definitionShortcut: definitionParam("_KK") },
     CREATE,
     // Field names from the article examples in mutation_priklady.pdf and query_priklady.pdf.
     async ({ definitionShortcut, ...article }) =>

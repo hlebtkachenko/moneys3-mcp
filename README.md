@@ -295,9 +295,11 @@ Create these XML transfer definitions in Money S3 (Nástroje / Výměna dat XML 
 | `UPD_ID` | `_ID` | Číslo dokladu | `m3_update_internal_document` |
 | `UPD_PH+ZV` | `_PH+ZV` | Číslo dokladu | `m3_update_liability`, `m3_update_receivable` |
 | `UPD_ZAK` | `_ZAK` | Zkratka | `m3_update_project` |
-| `UPD_ST`, `UPD_CN`, `UPD_UC`, `UPD_PK`, `UPD_MZDY` | none | Zkratka / účet / zaměstnanec + období | `m3_update_cost_center`, `m3_update_activity`, `m3_update_account`, `m3_update_predefined_entry`, `m3_update_wage` (unverified) |
+| `UPD_STR`, `UPD_CIN` | `_STR`, `_CIN` | Zkratka | `m3_update_cost_center`, `m3_update_activity` (unverified) |
+| `UPD_UCOSN+POH`, `UPD_PREDK` | `_UCOSN+POH`, `_PREDK` | účet / zkratka | `m3_update_account`, `m3_update_predefined_entry` (unverified) |
+| `UPD_MZDY` | `_MZDY` | zaměstnanec + období | `m3_update_wage` (unverified) |
 
-The last row has no standard import definition in a stock Money S3 26.900 agenda (`m3_code_lists list=xml_transfer_definitions` lists yours), and the manual says importing these lists is not supported; whether S3Api can update them, and through which definition, is unverified.
+The rows marked unverified copy standard definitions that exist in Money S3 26.900 agendas (`m3_code_lists list=xml_transfer_definitions` lists yours), but Seyfor's manual says these lists cannot be imported; whether S3Api can update them is unverified.
 
 ### Filtering examples
 
@@ -348,7 +350,7 @@ Layout and design: [ARCHITECTURE.md](ARCHITECTURE.md). Contributor rules: [AGENT
 ## Important Notes
 
 - Write operations are **asynchronous**: data goes to the import queue and is processed by S3 Automatic. Check the outcome with `m3_import_status`.
-- `definitionShortcut` names an XML transfer definition configured in your Money S3; defaults follow money.cz's examples.
+- `definitionShortcut` names an XML transfer definition configured in your Money S3; defaults are the standard definitions of a Money S3 26.900 agenda (`_FP+FV`, `_ADR`, `_KK`, `_S`, `_INVD`, `_BD`, `_PD`, `_ID`, `_PH+ZV`, `_ZAK`, `_STR`, `_CIN`, `_UCOSN+POH`, `_PREDK`, `_MZDY`).
 - Some deletes fail if the record has dependent records (e.g. a received invoice whose goods were already dispatched).
 - The API service must be running on the Money S3 PC. If requests fail with 502/503, check the S3Api Windows service.
 - Questions about the API can be directed to [api@money.cz](mailto:api@money.cz).
