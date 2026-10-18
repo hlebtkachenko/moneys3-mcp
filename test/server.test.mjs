@@ -202,7 +202,7 @@ test("finding 6: a mutation is never resent after a timeout or an error mentioni
   assert.equal(fake.requests.length, 1);
 
   fake.requests.length = 0;
-  fake.respond = () => Response.json({ errors: [{ message: "Document 4012026 is locked" }] });
+  fake.respond = () => Response.json({ errors: [{ message: "Document FV2026001 is locked" }] });
   await call("m3_create_cost_center", { code: "CC1", name: "Synthetic" });
   assert.equal(fake.requests.length, 1);
 });
