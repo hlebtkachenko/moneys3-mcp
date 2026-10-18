@@ -52,7 +52,7 @@ export function registerWageTools(server: McpServer, m3: MoneyS3Client) {
     match: wageKey,
     fields: { employmentRelationships, note: z.string().describe("Note") },
     definition: "_MZDY",
-    // The API has no wage query: only the employee is checked; the update definition keeps a miss from adding a wage.
+    // The API has no wage query: only the employee is checked, so a month without a wage gets one added.
     lookup: { root: "employees", where: (p) => ({ personalNumber: { eq: p.personalNumber as string } }), unique: true },
     mutation: "updateWage",
     arg: "wage",

@@ -290,8 +290,8 @@ const UPDATE_NOTE =
   "Goes through the Money S3 import queue like a create. Before sending, the tool reads the record by its key and refuses " +
   "if none matches (deleted records do not count where the API shows them) or, for documents, addresses, stock cards and " +
   "stocktaking documents, if more than one does. Money S3 then finds the record by the XML transfer definition's key " +
-  "(spojovací klíč). Only update definitions are accepted (UPD plus the standard shortcut), which must exist in Money S3 " +
-  "with new records and records without a key set to error, so a miss cannot create a record. Only the fields you give are " +
+  "(spojovací klíč) of the standard definition (or the one you name). The standard definitions add a record when the key " +
+  "misses, so the read is the only guard against creating one. Only the fields you give are " +
   "sent (leave a field out to keep it; blank strings and empty lists are refused), but Money S3 may fill missing fields from " +
   "the definition's presets. Documents with stock items or links to other documents take only selected header fields, and " +
   "Money S3 rejects at import what it would not let you edit (locked document or accounting period). Read the record back " +
@@ -314,7 +314,7 @@ interface UpdateSpec {
   match: z.ZodRawShape;
   /** Changeable fields, without defaults (zod 4 applies defaults inside .partial()). */
   fields: z.ZodRawShape;
-  /** Standard definition the update definition copies; the default is `UPD${definition}`. */
+  /** Default XML transfer definition: the agenda's standard import definition for the entity. */
   definition: string;
   /** Read-before-write: the collection and filter that must find the record before anything is sent. */
   lookup: {
@@ -334,7 +334,6 @@ interface UpdateSpec {
   check?: (p: Record<string, unknown>) => string | undefined;
 }
 
-/** Refusal message when the update's record is not found as required, else undefined. */
 /** Filter matching any of the given fields that has a value (for entities Money S3 may match on several keys). */
 export function anyOf(pairs: Array<[string, unknown]>): GqlInput {
   return { or: pairs.filter(([, v]) => v !== undefined).map(([k, v]) => ({ [k]: { eq: v as string } })) };
@@ -372,12 +371,7 @@ export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpe
     {
       ...spec.match,
       ...fields,
-      // Only UPD definitions: the create definitions add new records, so a miss would create one.
-      definitionShortcut: z
-        .string()
-        .regex(/^UPD/, "Update tools take only update definitions (shortcut starting with UPD)")
-        .default(`UPD${spec.definition}`)
-        .describe(`XML transfer definition for the update: a copy of ${spec.definition} with new records and records without a key set to error`),
+      definitionShortcut: definitionParam(spec.definition),
     },
     UPDATE,
     async (p: Record<string, unknown>) => {

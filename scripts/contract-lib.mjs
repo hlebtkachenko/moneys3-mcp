@@ -66,7 +66,7 @@ export const SK_TOOLS = new Set(["m3_vat_purposes"]);
 
 const SKIP_KEYS = new Set(["where", "order"]);
 const BY_KEY = { year: 2026, month: 3, countryCode: "CZ", guid: "00000000-0000-4000-8000-000000000001" };
-const BY_PATTERN = [[/\\d\{4\}/, "2026-01-15"], [/\^UPD/, "UPD_SAMPLE"], [/A-Z/, "SAMPLE_VALUE"]];
+const BY_PATTERN = [[/\\d\{4\}/, "2026-01-15"], [/A-Z/, "SAMPLE_VALUE"]];
 
 /** Sample arguments from a tool's JSON input schema: all fields, or required fields only. */
 function sample(schema, key = "", requiredOnly = false) {

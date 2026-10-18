@@ -4,7 +4,9 @@
 
 ### Fixed
 - Create tools default to definitions that exist in Money S3 26.900 agendas; the old defaults from money.cz's examples do not: address `_AD` → `_ADR`, stock card `_zSK` → `_KK`, liability `_ZV` and receivable `_PH` → `_PH+ZV`, project `_ZK` → `_ZAK`, cost center `_ST` → `_STR`, activity `_CN` → `_CIN`, account `_UC` → `_UCOSN+POH`, predefined entry `_PK` → `_PREDK`.
-- Update tools for cost centers, activities, accounts and predefined entries default to `UPD_STR`, `UPD_CIN`, `UPD_UCOSN+POH` and `UPD_PREDK` (were `UPD_ST`, `UPD_CN`, `UPD_UC`, `UPD_PK`).
+
+### Changed
+- Update tools default to the agenda's standard import definitions (the same names as the creates) and accept any `definitionShortcut`; the `UPD…`-only rule and the README list of update definitions to set up are gone, so updates work in every agenda without setup. The read-before-write refusal and the every-key match stay; the README lists what the read cannot catch (year-scoped code lists and accounts, wages).
 
 ## [2.1.0] - 2026-10-18
 

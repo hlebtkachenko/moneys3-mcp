@@ -334,7 +334,7 @@ test("update tools send only the key and the changed fields, refuse key-only cal
   assert.ok(!r.isError, text(r));
   assert.deepEqual(rootOf(last()), ["updateIssuedInvoice"]);
   assert.deepEqual(sentInput(), { documentNumber: "FV2026001", variableSymbol: "2026001" });
-  assert.match(last(), /definitionXMLTransfer: \{ shortCut: "UPD_FP\+FV" \}/);
+  assert.match(last(), /definitionXMLTransfer: \{ shortCut: "_FP\+FV" \}/);
   assert.match(fake.requests.at(-2).query, /issuedInvoices\(take: 10, where: \{ documentNumber: \{ eq: "FV2026001" \} \}\)/);
 
   fake.requests.length = 0;
@@ -453,10 +453,11 @@ test("update lookups filter on every key the mutation sends", async () => {
   }
 });
 
-test("updates refuse create definitions, blank text and lookups that cannot see every match", async () => {
-  const create = await call("m3_update_issued_invoice", { documentNumber: "FV1", description: "Synthetic", definitionShortcut: "_FP+FV" });
-  assert.ok(create.isError);
-  assert.match(text(create), /only update definitions/);
+test("updates take a named definition, refuse blank text and lookups that cannot see every match", async () => {
+  const named = await call("m3_update_issued_invoice", { documentNumber: "FV1", description: "Synthetic", definitionShortcut: "MY_FV" });
+  assert.ok(!named.isError, text(named));
+  assert.match(last(), /definitionXMLTransfer: \{ shortCut: "MY_FV" \}/);
+  fake.requests.length = 0;
   const blank = await call("m3_update_cost_center", { code: "CC1", name: " " });
   assert.ok(blank.isError);
   assert.equal(fake.requests.length, 0);

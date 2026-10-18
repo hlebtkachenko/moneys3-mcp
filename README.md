@@ -271,35 +271,13 @@ Not covered: wages cannot be read (the API has `createWage`/`updateWage`/`delete
 - **Reading:** GraphQL queries with `take`/`skip` paging and HotChocolate-style `where`/`order` objects. `where` and `order` must each be one GraphQL object (checked before sending).
 - **Deleted records:** Money S3 returns soft-deleted records and does not accept `isDeleted` as a filter. List tools hide them on the current page and say how many were hidden; `totalCount` still counts them.
 - **Writing:** mutations go into Money S3's import queue. A tool reports "queued for import" with an import GUID when `isSuccess` is true and an error when it is false. Check the processing result with `m3_import_status`.
-- **Updating:** update inputs carry no record ID. Money S3 finds the record by the XML transfer definition's key (spojovací klíč): document number for documents, partner code, IČO, bank account or GUID for addresses, catalogue, barcode, GUID or PLU for stock cards, the shortcut for code lists. Two guards keep an update from creating a record:
-  1. **Read before write.** The tool reads the record by its key first and sends nothing if no record matches (deleted records do not count where the API shows `isDeleted`), or, for documents, addresses, stock cards and stocktaking documents, if more than one does. Addresses and stock cards can be matched on several keys, so the read uses every key-capable field the update sends (GUID, code, IČO, bank account; catalogue, GUID, barcode, PLU) and refuses when they point at different records. Code lists and accounts exist once per accounting year: a match in any year passes, and the update definition is the guard for the target year. Wages cannot be read through the API: only the employee is checked, so wage updates rely on the definition alone.
-  2. **Dedicated update definitions.** Update tools accept only definitions whose shortcut starts with `UPD` (default: `UPD` plus the standard definition's shortcut, see [Update definitions](#update-definitions)), configured so that a miss is an error instead of a new record.
+- **Updating:** update inputs carry no record ID. Money S3 finds the record by the XML transfer definition's key (spojovací klíč): document number for documents, partner code, IČO, bank account or GUID for addresses, catalogue, barcode, GUID or PLU for stock cards, the shortcut for code lists. Update tools use the agenda's standard import definitions (`_FP+FV`, `_ADR`, `_KK`, … as for creates; `definitionShortcut` overrides it), so they work in every agenda without setup. Those definitions add a record when the key misses, so the read is the guard:
+  - **Read before write.** The tool reads the record by its key first and sends nothing if no record matches (deleted records do not count where the API shows `isDeleted`), or, for documents, addresses, stock cards and stocktaking documents, if more than one does. Addresses and stock cards can be matched on several keys, so the read uses every key-capable field the update sends (GUID, code, IČO, bank account; catalogue, GUID, barcode, PLU) and refuses when they point at different records.
+  - **What the read cannot catch.** Code lists and accounts exist once per accounting year: a match in any year passes, so an update aimed at a year without the record may add it there. Wages cannot be read through the API: only the employee is checked, so updating a month that has no wage adds one. A record deleted between the read and the import is added back. A custom definition with new records set to **chyba** (`definitionShortcut`) closes these gaps for one agenda.
 
   Update tools send only the key and the fields you give, and refuse a call that would send nothing but the key or that contains a blank string or empty list. Invoice and other document updates send header fields only (no items, no partner); `m3_update_stock_document` sends the empty `items` list its input type requires, and `m3_update_inventory_document` sends counted items. Whether Money S3 keeps the existing items is unverified. Documents with stock items or links to other documents take only selected header fields such as the description and texts (Seyfor's XML transfer manual), and documents Money S3 would not let you edit are refused. Read the record back after the import.
 - **Dates:** create tools accept `YYYY-MM-DD` or `DD.MM.YYYY` and send ISO `YYYY-MM-DD`, as in money.cz's official mutation examples.
 - **Partner:** document creates take a `partner` object (name, street, city, postalCode, countryCode, countryName, identificationNumber, vatIdentificationNumber, email, phone), sent as `partnerAddress`.
-
-### Update definitions
-
-Create these XML transfer definitions in Money S3 (Nástroje / Výměna dat XML / Definice přenosů) once, each a copy of the standard import definition with the key (spojovací klíč) below, the processing mode for existing records set to **aktualizovat**, and for new records and records without a key set to **chyba**. Until they exist, update tools fail at import; they accept no shortcut that does not start with `UPD`. Seyfor's XML transfer manual (24.900) says creating or editing definitions needs the XML Data Exchange (XMLDE) module; whether S3Api 26.900 needs it too is unverified.
-
-| Definition | Copy of | Key | Used by |
-|---|---|---|---|
-| `UPD_FP+FV` | `_FP+FV` | Číslo dokladu | `m3_update_issued_invoice`, `m3_update_received_invoice` |
-| `UPD_ADR` | `_ADR` | Kód partnera or GUID | `m3_update_address` |
-| `UPD_KK` | `_KK` | Katalog or GUID | `m3_update_stock_card` |
-| `UPD_S` | `_S` | Číslo dokladu | `m3_update_stock_document` |
-| `UPD_INVD` | `_INVD` | stocktaking and document ID | `m3_update_inventory_document` |
-| `UPD_BD` | `_BD` | Číslo dokladu (not bank account + statement item) | `m3_update_bank_document` |
-| `UPD_PD` | `_PD` | Číslo dokladu | `m3_update_cash_desk_document` |
-| `UPD_ID` | `_ID` | Číslo dokladu | `m3_update_internal_document` |
-| `UPD_PH+ZV` | `_PH+ZV` | Číslo dokladu | `m3_update_liability`, `m3_update_receivable` |
-| `UPD_ZAK` | `_ZAK` | Zkratka | `m3_update_project` |
-| `UPD_STR`, `UPD_CIN` | `_STR`, `_CIN` | Zkratka | `m3_update_cost_center`, `m3_update_activity` (unverified) |
-| `UPD_UCOSN+POH`, `UPD_PREDK` | `_UCOSN+POH`, `_PREDK` | účet / zkratka | `m3_update_account`, `m3_update_predefined_entry` (unverified) |
-| `UPD_MZDY` | `_MZDY` | zaměstnanec + období | `m3_update_wage` (unverified) |
-
-The rows marked unverified copy standard definitions that exist in Money S3 26.900 agendas (`m3_code_lists list=xml_transfer_definitions` lists yours), but Seyfor's manual says these lists cannot be imported; whether S3Api can update them is unverified.
 
 ### Filtering examples
 
