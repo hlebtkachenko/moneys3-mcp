@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { parse, valueFromASTUntyped } from "graphql";
 import { startFake, defaultData, AGENDA } from "../scripts/fake-money.mjs";
-import { argsFor, validate } from "../scripts/contract-lib.mjs";
+import { SK_TOOLS, callsFor, validate } from "../scripts/contract-lib.mjs";
 
 const dist = process.env.M3_DIST ? new URL(process.env.M3_DIST) : undefined;
 let fake;
@@ -51,22 +51,34 @@ const ROOTS = {
   m3_create_cost_center: ["createCentre"], m3_create_project: ["createJobOrder"], m3_create_activity: ["createOperation"],
   m3_orders: ["receivedOrders"],
   m3_numerical_series: ["numericalSeries"], m3_currencies: ["currencies"], m3_vat_classifications: ["vatClassifications"],
-  m3_vat_purposes: ["vatPurposes"], m3_constant_symbols: ["constantSymbols"], m3_countries: ["countries"], m3_flags: ["flags"],
+  m3_vat_purposes: ["vatPurposes"], m3_constant_symbols: ["constantSymbols"], m3_countries: ["countries"],
   m3_crm_activities: ["activities"], m3_create_account: ["createAccountChart"], m3_create_predefined_entry: ["createAccountAssignmentAcc"],
   m3_delete_internal_document: ["deleteInternalDocument"], m3_delete_liability: ["deleteLiability"], m3_delete_receivable: ["deleteReceivable"],
   m3_delete_bank_document: ["deleteBankStatement"], m3_delete_cash_desk_document: ["deleteCashVoucher"], m3_delete_stock_card: ["deleteArticle"],
   m3_delete_stock_document: ["deleteReceivedSlip"], m3_delete_inventory_document: ["deleteStockTakingDocument"], m3_create_wage: ["createWage"],
+  m3_update_issued_invoice: ["updateIssuedInvoice"], m3_update_received_invoice: ["updateReceivedInvoice"], m3_update_address: ["updateCompany"],
+  m3_update_stock_card: ["updateArticle"], m3_update_stock_document: ["updateReceivedSlip"], m3_update_inventory_document: ["updateStockTakingDocument"],
+  m3_update_bank_document: ["updateBankStatement"], m3_update_cash_desk_document: ["updateCashVoucher"],
+  m3_update_internal_document: ["updateInternalDocument"], m3_update_liability: ["updateLiability"], m3_update_receivable: ["updateReceivable"],
+  m3_update_cost_center: ["updateCentre"], m3_update_project: ["updateJobOrder"], m3_update_activity: ["updateOperation"],
+  m3_update_account: ["updateAccountChart"], m3_update_predefined_entry: ["updateAccountAssignmentAcc"], m3_update_wage: ["updateWage"],
+  m3_code_lists: ["jobOrderTypes"], m3_years: ["years"], m3_exchange_rates: ["exchangeLists"], m3_vat_accounting: ["vatAccountingAccs"],
+  m3_stock_takings: ["stockTakings"],
 };
 
 test("every tool sends the expected GraphQL request and succeeds", async () => {
   assert.deepEqual(tools.map((t) => t.name).sort(), Object.keys(ROOTS).sort());
   for (const tool of tools) {
-    for (const requiredOnly of [false, true]) {
+    for (const { label, args, requiredOnly } of callsFor(tool)) {
       fake.requests.length = 0;
       fake.m3.setAgendaGuid(AGENDA);
-      const r = await call(tool.name, argsFor(tool, requiredOnly));
-      assert.ok(!r.isError, `${tool.name}: ${text(r)}`);
-      assert.deepEqual(fake.requests.flatMap((q) => rootOf(q.query)), ROOTS[tool.name], tool.name);
+      const r = await call(tool.name, args);
+      if (requiredOnly && tool.name.startsWith("m3_update_")) {
+        assert.ok(r.isError && fake.requests.length === 0, `${tool.name}: a key-only update must be refused before sending`);
+        continue;
+      }
+      assert.ok(!r.isError, `${tool.name} (${label}): ${text(r)}`);
+      if (label === "full" || label === "required") assert.deepEqual(fake.requests.flatMap((q) => rootOf(q.query)), ROOTS[tool.name], tool.name);
       for (const req of fake.requests) {
         assert.equal(req.method, "POST");
         assert.equal(new URL(req.url).pathname, "/graphql/");
@@ -77,11 +89,17 @@ test("every tool sends the expected GraphQL request and succeeds", async () => {
   }
 });
 
-test("contract: no request uses a field the schema summary rules out", async () => {
+test("contract: every request validates against the live schema", async () => {
   for (const tool of tools) {
-    fake.requests.length = 0;
-    await call(tool.name, argsFor(tool));
-    for (const req of fake.requests) assert.deepEqual(validate(req.query).errors, [], tool.name);
+    for (const { label, args } of callsFor(tool)) {
+      fake.requests.length = 0;
+      await call(tool.name, args);
+      for (const req of fake.requests) {
+        const { errors, skOnly } = validate(req.query);
+        assert.deepEqual(errors, [], `${tool.name} (${label})`);
+        if (!SK_TOOLS.has(tool.name)) assert.deepEqual(skOnly, [], `${tool.name} (${label}) fails on Czech agendas`);
+      }
+    }
   }
 });
 
@@ -146,7 +164,7 @@ test("finding 4: every tool carries annotations matching what it does", () => {
   for (const t of tools) {
     const a = t.annotations;
     assert.ok(a, `${t.name} has no annotations`);
-    if (t.name.startsWith("m3_delete_")) assert.equal(a.destructiveHint, true, t.name);
+    if (t.name.startsWith("m3_delete_") || t.name.startsWith("m3_update_")) assert.deepEqual([a.readOnlyHint, a.destructiveHint], [false, true], t.name);
     else if (t.name.startsWith("m3_create_")) assert.deepEqual([a.readOnlyHint, a.destructiveHint], [false, false], t.name);
     else if (t.name === "m3_graphql") assert.deepEqual([a.destructiveHint, a.openWorldHint], [true, true]);
     else assert.equal(a.readOnlyHint, true, t.name);
@@ -159,11 +177,11 @@ test("finding 5: enum arguments cannot inject GraphQL and strings are escaped", 
   assert.equal(fake.requests.length, 0, "nothing may be sent");
 
   const name = 'Quote " back\\slash \r\n new line';
-  const ok = await call("m3_create_account", { account: "211", name, type: "ACTIVE" });
+  const ok = await call("m3_create_account", { account: "211", name, type: "BALANCE_SHEET" });
   assert.ok(!ok.isError, text(ok));
   assert.deepEqual(rootOf(last()), ["createAccountChart"]);
   assert.equal(sentInput().name, name);
-  assert.equal(sentInput().type, "ACTIVE");
+  assert.equal(sentInput().type, "BALANCE_SHEET");
 
   const where = await call("m3_issued_invoices", { where: "{ id: { eq: 1 } }) { totalCount } } mutation { deleteCompany(company: { id: 1 }) { guid } } #" });
   assert.ok(where.isError);
@@ -246,9 +264,11 @@ test("finding 11: collection and field names follow the official examples", asyn
   assert.deepEqual(rootOf(last()), ["issuedOrders"]);
   await call("m3_employees", {});
   assert.match(last(), /centre \{ shortCut name \}/);
-  assert.doesNotMatch(last(), /costCenter|\bcity\b|\bzip\b/);
-  await call("m3_create_inventory_document", { items: [{ catalogue: "SKU-1", warehouseCode: "MAIN", inventoryAmount: 3 }] });
-  assert.deepEqual(sentInput().items, [{ article: { catalogue: "SKU-1" }, inventoryAmount: 3, warehouse: { code: "MAIN" } }]);
+  assert.doesNotMatch(last(), /costCenter|\bcity\b|\bzip\b|dateOfBirth|birthNumber/);
+  await call("m3_create_inventory_document", { stockTakingId: 4, stockTakingDocumentId: 2, items: [{ catalogue: "SKU-1", warehouseCode: "MAIN", inventoryAmount: 3 }] });
+  assert.deepEqual(sentInput(), {
+    stockTakingId: 4, stockTakingDocumentId: 2, items: [{ article: { catalogue: "SKU-1" }, inventoryAmount: 3, warehouse: { code: "MAIN" } }],
+  });
 });
 
 test("finding 12: hidden deleted records are stated in the list header", async () => {
@@ -272,9 +292,9 @@ test("finding 14: the README lists exactly the registered tools", () => {
   assert.match(readme, new RegExp(`\\*\\*${tools.length} tools\\*\\*`));
 });
 
-test("finding 15: the hand-written schema summary is named as such", () => {
-  assert.ok(fs.existsSync(new URL("../docs/schema-summary.json", import.meta.url)));
-  assert.ok(!fs.existsSync(new URL("../schema-introspection.json", import.meta.url)));
+test("the contract schema is the live SDL", () => {
+  assert.match(fs.readFileSync(new URL("../docs/schema.graphql", import.meta.url), "utf8"), /^# Money S3 GraphQL schema from a live S3Api/);
+  assert.ok(!fs.existsSync(new URL("../docs/schema-summary.json", import.meta.url)));
 });
 
 test("GraphQL errors and HTTP errors on reads are errors, not empty lists", async () => {
@@ -299,4 +319,52 @@ test("m3_graphql never cuts JSON: large lists drop whole records and say so", as
   const big = await call("m3_graphql", { query: "{ __schema { types { name kind } } }" });
   assert.equal(big.content.length, 1);
   assert.match(text(big), /over the 50 KB output limit.*__type\(name/s);
+});
+
+test("update tools send only the key and the changed fields, refuse key-only calls and are never retried", async () => {
+  const r = await call("m3_update_issued_invoice", { documentNumber: "FV2026001", variableSymbol: "2026001" });
+  assert.ok(!r.isError, text(r));
+  assert.deepEqual(rootOf(last()), ["updateIssuedInvoice"]);
+  assert.deepEqual(sentInput(), { documentNumber: "FV2026001", variableSymbol: "2026001" });
+  assert.match(last(), /definitionXMLTransfer: \{ shortCut: "_FP\+FV" \}/);
+
+  fake.requests.length = 0;
+  const empty = await call("m3_update_liability", { documentNumber: "ZV001", year: 2026 });
+  assert.ok(empty.isError);
+  assert.equal(fake.requests.length, 0);
+  const noKey = await call("m3_update_address", { email: "info@example.com" });
+  assert.ok(noKey.isError);
+  assert.match(text(noKey), /guid, code or identificationNumber/);
+  assert.equal(fake.requests.length, 0);
+
+  await call("m3_update_address", { identificationNumber: "12345678", email: "info@example.com" });
+  assert.deepEqual(sentInput(), { identificationNumber: "12345678", email: "info@example.com" });
+  await call("m3_update_stock_document", { documentNumber: "PR001", description: "Synthetic" });
+  assert.deepEqual(sentInput(), { documentNumber: "PR001", description: "Synthetic", items: [] });
+  await call("m3_update_wage", { personalNumber: "00001", year: 2026, month: 3, note: "Synthetic" });
+  assert.deepEqual(sentInput(), { employee: { personalNumber: "00001" }, year: "2026", month: "3", note: "Synthetic" });
+  await call("m3_update_cost_center", { code: "CC1", note: "Synthetic" });
+  assert.deepEqual(sentInput(), { shortCut: "CC1", note: "Synthetic" });
+
+  fake.requests.length = 0;
+  fake.respond = () => {
+    throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  };
+  const lost = await call("m3_update_receivable", { documentNumber: "PH001", description: "Synthetic" });
+  assert.ok(lost.isError);
+  assert.match(text(lost), /Outcome unknown.*m3_receivables/s);
+  assert.equal(fake.requests.length, 1);
+
+  fake.respond = (query) => Response.json({ data: { updateCentre: { guid: "00000000-0000-4000-8000-0000000000bb", isSuccess: false } } });
+  const rejected = await call("m3_update_cost_center", { code: "CC1", name: "Synthetic" });
+  assert.ok(rejected.isError);
+  assert.match(text(rejected), /did not accept/);
+});
+
+test("enum arguments take the live schema's values", async () => {
+  const bad = await call("m3_create_account", { account: "211", type: "ACTIVE" });
+  assert.ok(bad.isError, "ACTIVE is a subtype1 value, not an AccountChartType");
+  const ok = await call("m3_create_account", { account: "211", type: "BALANCE_SHEET", subtype1: "ACTIVE" });
+  assert.ok(!ok.isError, text(ok));
+  assert.deepEqual([sentInput().type, sentInput().subtype1], ["BALANCE_SHEET", "ACTIVE"]);
 });

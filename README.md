@@ -6,7 +6,7 @@
 
 MCP server for [Money S3](https://money.cz/) — the Czech/Slovak accounting system by Seyfor. Connects any MCP-compatible AI client to your Money S3 data via the official GraphQL API.
 
-**62 tools** covering invoices, contacts, stock, banking, documents, accounting, payroll and lookups, plus a raw GraphQL tool.
+**83 tools** covering invoices, contacts, stock, banking, documents, accounting, payroll, controlling and code lists (read, create, update, delete), plus a raw GraphQL tool.
 
 ## Prerequisites
 
@@ -124,7 +124,7 @@ If `MONEYS3_AGENDA_GUID` is set in env, steps 2–3 are skipped.
 
 ## Available Tools
 
-Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes `destructiveHint: true`, `m3_graphql` `destructiveHint` + `openWorldHint`.
+Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, updates and deletes `destructiveHint: true`, `m3_graphql` `destructiveHint` + `openWorldHint`.
 
 ### Setup and utility (6 tools)
 
@@ -134,10 +134,10 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_set_agenda` | Set the active agenda for subsequent calls |
 | `m3_connection_test` | Test OAuth2, endpoint and agenda access; auto-selects a single agenda |
 | `m3_import_status` | Show how Money S3 processed a queued write (`importStatus` by import GUID) |
-| `m3_graphql` | Raw GraphQL query or mutation (mutations detected by parsing, never cached or retried) |
+| `m3_graphql` | Raw GraphQL query or mutation (mutations detected by parsing, never cached or retried); output over 50 KB is trimmed to whole records, never cut mid-JSON |
 | `m3_orders` | Received or issued orders (`type: received \| issued`) |
 
-### Invoices (5 tools)
+### Invoices (7 tools)
 
 | Tool | Description |
 |---|---|
@@ -145,17 +145,20 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_received_invoices` | Received invoices with VAT summary, payment status, controlling variables |
 | `m3_create_issued_invoice` | Create an issued invoice with partner and line items |
 | `m3_create_received_invoice` | Create a received invoice with partner and line items |
+| `m3_update_issued_invoice` | Update an issued invoice's header by document number |
+| `m3_update_received_invoice` | Update a received invoice's header by document number |
 | `m3_delete_invoice` | Delete an invoice by ID and year |
 
-### Address book (3 tools)
+### Address book (4 tools)
 
 | Tool | Description |
 |---|---|
 | `m3_address_book` | Contacts with addresses, bank accounts, credit limit, discount, maturity terms |
 | `m3_create_address` | Create a contact (address, postal code, country code, banking, credit limit, maturity) |
+| `m3_update_address` | Update a contact found by GUID, partner code or IČO |
 | `m3_delete_address` | Delete an address book entry |
 
-### Stock (7 tools)
+### Stock (11 tools)
 
 | Tool | Description |
 |---|---|
@@ -163,11 +166,15 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_stock_lists` | Warehouses and price levels |
 | `m3_stock_documents` | Received stock slips with partner and controlling variables |
 | `m3_inventory_documents` | Stocktaking documents with counted amounts |
+| `m3_stock_takings` | Stocktakings (inventury) with state and dates; their IDs feed inventory documents |
 | `m3_create_stock_card` | Create an article (catalogue, description, barcode, PLU, weight) |
 | `m3_create_stock_document` | Create a received stock slip with stock items |
 | `m3_create_inventory_document` | Create a stocktaking document with counted items |
+| `m3_update_stock_card` | Update an article by catalogue (or GUID) |
+| `m3_update_stock_document` | Update a received stock slip's description, title, note and texts |
+| `m3_update_inventory_document` | Update a stocktaking document (counted items) by stocktaking and document ID |
 
-### Banking (5 tools)
+### Banking (7 tools)
 
 | Tool | Description |
 |---|---|
@@ -176,8 +183,10 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_bank_accounts` | Bank accounts and cash boxes |
 | `m3_create_bank_document` | Create a bank document (symbols, partner, bank account, controlling) |
 | `m3_create_cash_desk_document` | Create a cash desk document (partner, cash box, controlling) |
+| `m3_update_bank_document` | Update a bank document's header by document number |
+| `m3_update_cash_desk_document` | Update a cash desk document's header by document number |
 
-### Documents (6 tools)
+### Documents (9 tools)
 
 | Tool | Description |
 |---|---|
@@ -187,26 +196,33 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_create_internal_document` | Create an internal document |
 | `m3_create_liability` | Create a liability with partner and maturity |
 | `m3_create_receivable` | Create a receivable with partner and maturity |
+| `m3_update_internal_document` | Update an internal document's header by document number |
+| `m3_update_liability` | Update a liability's header by document number |
+| `m3_update_receivable` | Update a receivable's header by document number |
 
-### Accounting (5 tools)
+### Accounting (8 tools)
 
 | Tool | Description |
 |---|---|
 | `m3_accounting_journal` | Accounting journal with controlling variables |
 | `m3_chart_of_accounts` | Chart of accounts |
-| `m3_predefined_entries` | Predefined entries (předkontace) |
-| `m3_create_account` | Create an account (enum arguments validated as enum names) |
+| `m3_predefined_entries` | Predefined entries (předkontace) for accounting or tax records (`ledger: accounting \| tax`) |
+| `m3_vat_accounting` | VAT accounting rules (rozúčtování DPH) for accounting or tax records |
+| `m3_create_account` | Create an account (enum arguments take the schema's values) |
 | `m3_create_predefined_entry` | Create a predefined entry |
+| `m3_update_account` | Update an account by account number |
+| `m3_update_predefined_entry` | Update a predefined entry by shortcut |
 
-### Payroll and service (3 tools)
+### Payroll and service (4 tools)
 
 | Tool | Description |
 |---|---|
-| `m3_employees` | Employees with address, contact, employment dates, cost center |
-| `m3_service_repairs` | Service and repair records |
+| `m3_employees` | Employees with employment relationships, current address and contact |
+| `m3_service_repairs` | Service or repair documents (`type: services \| repairs`) |
 | `m3_create_wage` | Create a monthly wage with worked time per employment relationship |
+| `m3_update_wage` | Update a monthly wage by employee, year and month |
 
-### Controlling (6 tools)
+### Controlling (9 tools)
 
 | Tool | Description |
 |---|---|
@@ -216,18 +232,23 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_create_cost_center` | Create a cost center |
 | `m3_create_project` | Create a project |
 | `m3_create_activity` | Create an activity |
+| `m3_update_cost_center` | Update a cost center's name or note by code |
+| `m3_update_project` | Update a project's name or note by code |
+| `m3_update_activity` | Update an activity's name or note by code |
 
-### Lookups (8 tools)
+### Lookups and code lists (10 tools)
 
 | Tool | Description |
 |---|---|
 | `m3_numerical_series` | Numerical series |
-| `m3_currencies` | Currencies with exchange rates |
-| `m3_vat_classifications` | VAT classifications |
-| `m3_vat_purposes` | VAT purposes |
+| `m3_currencies` | Currencies with country and rate unit |
+| `m3_exchange_rates` | Exchange rate lists by date and bank |
+| `m3_vat_classifications` | VAT classifications (členění DPH) with type and VAT return row |
+| `m3_vat_purposes` | VAT purposes (Slovak agendas only) |
 | `m3_constant_symbols` | Constant symbols |
 | `m3_countries` | Countries |
-| `m3_flags` | Flags |
+| `m3_years` | Accounting years of the agenda |
+| `m3_code_lists` | Smaller code lists (`list`): job order types, address keys, shipping methods, combined nomenclature, postal codes, non-monetary payments, XML transfer definitions, employment codes and types, stocktaking types, banks, stock card parameters, tax record movements |
 | `m3_crm_activities` | CRM activity records |
 
 ### Deletes (8 tools)
@@ -243,11 +264,14 @@ Annotations: reads are `readOnlyHint`, creates `destructiveHint: false`, deletes
 | `m3_delete_stock_document` | Delete a received stock slip by ID and year |
 | `m3_delete_inventory_document` | Delete a stocktaking document by ID |
 
+Not covered: wages cannot be read (the API has `createWage`/`updateWage`/`deleteWage` but no wage query). `eshops` is not exposed because its records hold FTP passwords. Other query roots without a tool (`journalTrs`, `warehouseStocks`, offers, inquiries, issued slips, sale slips, transfer and production notes, delivery notes) are reachable through `m3_graphql`.
+
 ## Data Model
 
 - **Reading:** GraphQL queries with `take`/`skip` paging and HotChocolate-style `where`/`order` objects. `where` and `order` must each be one GraphQL object (checked before sending).
 - **Deleted records:** Money S3 returns soft-deleted records and does not accept `isDeleted` as a filter. List tools hide them on the current page and say how many were hidden; `totalCount` still counts them.
 - **Writing:** mutations go into Money S3's import queue. A tool reports "queued for import" with an import GUID when `isSuccess` is true and an error when it is false. Check the processing result with `m3_import_status`.
+- **Updating:** update inputs carry no record ID. Money S3 finds the record by the XML transfer definition's key (spojovací klíč): document number for documents, partner code, IČO, bank account or GUID for addresses, catalogue, barcode, GUID or PLU for stock cards, the shortcut for code lists. The definition must update existing records (Money S3's default since 24.900). Update tools send only the key and the fields you give and refuse a call that changes nothing. Documents with stock items or links to other documents take only selected header fields (Seyfor's XML transfer manual), so document updates change headers, not items. Read the record back after the import.
 - **Dates:** create tools accept `YYYY-MM-DD` or `DD.MM.YYYY` and send ISO `YYYY-MM-DD`, as in money.cz's official mutation examples.
 - **Partner:** document creates take a `partner` object (name, street, city, postalCode, countryCode, countryName, identificationNumber, vatIdentificationNumber, email, phone), sent as `partnerAddress`.
 
@@ -271,7 +295,7 @@ order: { dateOfMaturity: ASC }
 
 ## Schema coverage
 
-Money S3 publishes no machine-readable schema. [docs/schema-summary.json](docs/schema-summary.json) is a hand-written summary of 16 query types and 11 mutation input types (top-level fields only); a real introspection needs a live Money S3 API server. `npm run check:contract` calls every tool and validates the GraphQL it sends against that summary and lists every path the summary does not cover. Field names outside the summary follow money.cz's official query and mutation examples and are marked as unverified in the code.
+[docs/schema.graphql](docs/schema.graphql) is the full schema of a live S3Api (Money S3 26.900), fetched from `GET /graphql/?sdl`, which S3Api serves without a token; `MONEYS3_DOMAIN=yourcompany npm run introspect` regenerates it. `npm run check:contract` calls every tool (all fields, required fields only, every value of each enum argument) against a fake transport and validates the GraphQL it sends against that schema with graphql-js: field names, argument and input types, required input fields, enum values and scalar literal kinds. It also flags fields marked `@legislationDirective(legislationType: SK)`, which Czech agendas reject at runtime.
 
 ## Development
 
@@ -279,7 +303,8 @@ Money S3 publishes no machine-readable schema. [docs/schema-summary.json](docs/s
 npm ci
 npm run build
 npm test                # node:test suite, real tool handlers against a fake Money S3 transport
-npm run check:contract  # validate every tool's GraphQL against docs/schema-summary.json
+npm run check:contract  # validate every tool's GraphQL against docs/schema.graphql
+npm run introspect      # refresh docs/schema.graphql from a live S3Api (needs MONEYS3_DOMAIN)
 ```
 
 Layout and design: [ARCHITECTURE.md](ARCHITECTURE.md). Contributor rules: [AGENTS.md](AGENTS.md).
@@ -291,7 +316,7 @@ Layout and design: [ARCHITECTURE.md](ARCHITECTURE.md). Contributor rules: [AGENT
 - Reads retry on timeout; any request retries on 401 (token refresh) and 429 (rate limit)
 - Mutations are never resent after a timeout or transport error: the tool reports "outcome unknown" and names the tool to verify with
 - Response cache (configurable TTL) for reads only; mutations bypass and clear it; document collections are never cached
-- Mutation inputs are encoded as GraphQL literals (strings JSON-escaped, numbers finite, enum values checked against `^[A-Z][A-Z0-9_]*$`)
+- Mutation inputs are encoded as GraphQL literals (strings JSON-escaped, numbers finite, enum arguments limited to the schema's values)
 - `where`/`order` on read tools are user-supplied GraphQL: they are inserted only after parsing as a single object or list value, and read tools reject any document that contains a mutation
 - `m3_graphql` sends any document (max 10,000 characters) and is annotated destructive
 - No credentials logged or exposed in error messages

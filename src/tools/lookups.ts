@@ -1,7 +1,49 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { READ, buildArgs, textResult, errorResult } from "./helpers.js";
+import { READ, buildArgs, errorResult, listParams, listTool, str, textResult } from "./helpers.js";
+
+type Rec = Record<string, unknown>;
+
+// [tool, description, root query, title, fields, line format]; fields from docs/schema.graphql.
+const LOOKUPS: Array<[string, string, string, string, string, (item: Rec) => string]> = [
+  ["m3_currencies", "List currencies with their country and rate unit (rates: m3_exchange_rates).", "currencies", "Currencies", "code country exchangeRateAmount",
+    (c) => `- **${str(c.code)}** ${str(c.country)} (rate unit: ${str(c.exchangeRateAmount)})`],
+  ["m3_vat_classifications", "List VAT classifications (členění DPH).", "vatClassifications", "VAT Classifications", "shortCut description type vatReturnRow",
+    (v) => `- **${str(v.shortCut)}** ${str(v.description)} (type: ${str(v.type)}, VAT return row: ${str(v.vatReturnRow)})`],
+  ["m3_vat_purposes", "List VAT purposes (účel DPH) with their coefficient. Slovak (SK legislation) agendas only: Czech agendas reject this query.", "vatPurposes", "VAT Purposes", "shortCut description coefficient",
+    (v) => `- **${str(v.shortCut)}** ${str(v.description)} (coefficient: ${str(v.coefficient)})`],
+  ["m3_constant_symbols", "List constant symbols (konstantní symboly).", "constantSymbols", "Constant Symbols", "code description",
+    (c) => `- **${str(c.code)}** ${str(c.description)}`],
+  ["m3_countries", "List country codes.", "countries", "Countries", "code name", (c) => `- **${str(c.code)}** ${str(c.name)}`],
+];
+
+// m3_code_lists: list name -> [root query, title, fields]. eshops is left out on
+// purpose: its records hold FTP passwords and mail settings.
+const CODE_LISTS = {
+  job_order_types: ["jobOrderTypes", "Job Order Types", "shortCut name note"],
+  address_keys: ["addressKeys", "Address Keys", "shortCut description isPreferred note"],
+  shippings: ["shippings", "Shipping Methods", "shortCut name note"],
+  combined_nomenclatures: ["combinedNomenclatures", "Combined Nomenclature", "code name measureUnit type"],
+  postal_codes: ["municipalityPostalCodes", "Postal Codes", "postalCode municipality post region countryCode"],
+  non_monetary_payments: ["nonMonetaryPayments", "Non-monetary Payments", "code description type amount variableSymbol"],
+  xml_transfer_definitions: ["definitionXMLTransfers", "XML Transfer Definitions", "shortCut description type systemDefinition isCsw note"],
+  employment_codes: ["employmentCode", "Employment Codes", "code name"],
+  employment_types: ["employmentType", "Employment Types", "id name"],
+  stock_taking_types: ["stockTakingTypes", "Stocktaking Types", "shortCut name note"],
+  banks: ["banks", "Banks", "code shortCut name swift countryCode"],
+  parameters: ["parameters", "Stock Card Parameters", "id name type measureUnit userCode values"],
+  account_movements: ["accountMovements", "Tax Record Movements", "shortCut description type column year note"],
+} as const;
+type CodeList = keyof typeof CODE_LISTS;
+
+/** One line per record: every non-empty field, the first in bold. */
+function plainLine(item: Rec): string {
+  const parts = Object.entries(item)
+    .filter(([, v]) => v !== null && v !== "" && !(Array.isArray(v) && !v.length))
+    .map(([k, v], i) => (i === 0 ? `**${v}**` : `${k}: ${Array.isArray(v) ? v.join(", ") : v}`));
+  return `- ${parts.join(" | ")}`;
+}
 
 export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -52,32 +94,32 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
     },
   );
 
+  for (const [name, description, root, title, fields, format] of LOOKUPS) {
+    server.tool(name, `${description} Read-only.`, listParams(200, 50), READ, async (args) => listTool(m3, root, fields, title, args, format, "\n"));
+  }
+
   server.tool(
-    "m3_currencies",
-    "List configured currencies with exchange rates. Read-only.",
-    {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
+    "m3_code_lists",
+    "List one of the smaller code lists (číselníky): job order types, address keys, shipping methods, combined nomenclature, postal codes, non-monetary payments, XML transfer definitions (the definitionShortcut values of write tools), employment codes and types, stocktaking types, banks, stock card parameters, tax record movements (pohyby). Read-only.",
+    { list: z.enum(Object.keys(CODE_LISTS) as [CodeList, ...CodeList[]]).describe("Code list to read"), ...listParams(200, 50) },
     READ,
-    async ({ take, skip, where, order }) => {
+    async ({ list, ...args }) => {
+      const [root, title, fields] = CODE_LISTS[list];
+      return listTool(m3, root, fields, title, args, plainLine, "\n");
+    },
+  );
+
+  server.tool(
+    "m3_years",
+    "List the accounting years of the active agenda with their date ranges. Read-only.",
+    {},
+    READ,
+    async () => {
       try {
-        const gql = `{ currencies(${buildArgs(take, skip, where, order)}) {
-        items { code name exchangeRate exchangeRateAmount }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ currencies: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const cur = data.currencies;
-        if (!cur?.items?.length) return textResult("No currencies found.");
-
-        const lines = [`# Currencies (${cur.items.length} of ${cur.totalCount})`, ""];
-        for (const c of cur.items) {
-          lines.push(`- **${c.code ?? "—"}** ${c.name ?? "—"} (rate: ${c.exchangeRate ?? "?"} per ${c.exchangeRateAmount ?? "?"})`);
-        }
-        return textResult(lines.join("\n"));
+        const data = await m3.query<{ years: Rec[] | null }>("{ years { year dateFrom dateTo } }");
+        const years = data.years ?? [];
+        const lines = years.map((y) => `- **${str(y.year)}**: ${str(y.dateFrom).slice(0, 10)} to ${str(y.dateTo).slice(0, 10)}`);
+        return textResult(`# Accounting Years (${years.length})\n\n${lines.join("\n") || "Nothing to show."}`);
       } catch (err) {
         return errorResult((err as Error).message);
       }
@@ -85,163 +127,27 @@ export function registerLookupTools(server: McpServer, m3: MoneyS3Client) {
   );
 
   server.tool(
-    "m3_vat_classifications",
-    "List VAT classifications (DPH). Read-only.",
-    {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
+    "m3_exchange_rates",
+    "List exchange rate lists (kurzovní lístky) by date and bank with the rate per currency. Read-only.",
+    listParams(100, 10),
     READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ vatClassifications(${buildArgs(take, skip, where, order)}) {
-        items { shortCut name type vatRate }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ vatClassifications: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const vc = data.vatClassifications;
-        if (!vc?.items?.length) return textResult("No VAT classifications found.");
-
-        const lines = [`# VAT Classifications (${vc.items.length} of ${vc.totalCount})`, ""];
-        for (const v of vc.items) {
-          lines.push(`- **${v.shortCut ?? "—"}** ${v.name ?? "—"} (type: ${v.type ?? "?"}, rate: ${v.vatRate ?? "?"}%)`);
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
-  );
-
-  server.tool(
-    "m3_vat_purposes",
-    "List VAT purposes (ucel DPH). Read-only.",
-    {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ vatPurposes(${buildArgs(take, skip, where, order)}) {
-        items { shortCut name }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ vatPurposes: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const vp = data.vatPurposes;
-        if (!vp?.items?.length) return textResult("No VAT purposes found.");
-
-        const lines = [`# VAT Purposes (${vp.items.length} of ${vp.totalCount})`, ""];
-        for (const v of vp.items) {
-          lines.push(`- **${v.shortCut ?? "—"}** ${v.name ?? "—"}`);
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
-  );
-
-  server.tool(
-    "m3_constant_symbols",
-    "List constant symbols (konstantni symboly). Read-only.",
-    {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ constantSymbols(${buildArgs(take, skip, where, order)}) {
-        items { code name }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ constantSymbols: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const cs = data.constantSymbols;
-        if (!cs?.items?.length) return textResult("No constant symbols found.");
-
-        const lines = [`# Constant Symbols (${cs.items.length} of ${cs.totalCount})`, ""];
-        for (const c of cs.items) {
-          lines.push(`- **${c.code ?? "—"}** ${c.name ?? "—"}`);
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
-  );
-
-  server.tool(
-    "m3_countries",
-    "List country codes. Read-only.",
-    {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ countries(${buildArgs(take, skip, where, order)}) {
-        items { code name }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ countries: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const ct = data.countries;
-        if (!ct?.items?.length) return textResult("No countries found.");
-
-        const lines = [`# Countries (${ct.items.length} of ${ct.totalCount})`, ""];
-        for (const c of ct.items) {
-          lines.push(`- **${c.code ?? "—"}** ${c.name ?? "—"}`);
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
-  );
-
-  server.tool(
-    "m3_flags",
-    "List flags/labels used for document tagging. Read-only.",
-    {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
-    READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ flags(${buildArgs(take, skip, where, order)}) {
-        items { shortCut name colour }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ flags: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const fl = data.flags;
-        if (!fl?.items?.length) return textResult("No flags found.");
-
-        const lines = [`# Flags (${fl.items.length} of ${fl.totalCount})`, ""];
-        for (const f of fl.items) {
-          lines.push(`- **${f.shortCut ?? "—"}** ${f.name ?? "—"}${f.colour ? ` (colour: ${f.colour})` : ""}`);
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    async (args) =>
+      listTool(
+        m3,
+        "exchangeLists",
+        "sequence date bank { shortCut name } exchangeRates { currency { code } country exchangeRateAmount foreignExchangeAverage currencyPurchase currencySale }",
+        "Exchange Rate Lists",
+        args,
+        (l) => {
+          const rates = (l.exchangeRates as Rec[] | undefined) ?? [];
+          return [
+            `## ${str(l.date)} (${str((l.bank as Rec | undefined)?.name, "no bank")}, sequence ${str(l.sequence)})`,
+            ...rates.map(
+              (r) => `- ${str((r.currency as Rec | null | undefined)?.code ?? r.country)}: ${str(r.foreignExchangeAverage)} per ${str(r.exchangeRateAmount)} (buy ${str(r.currencyPurchase)}, sell ${str(r.currencySale)})`,
+            ),
+          ].join("\n");
+        },
+      ),
   );
 
   server.tool(

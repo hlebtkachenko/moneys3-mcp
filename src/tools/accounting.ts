@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { READ, buildArgs, textResult, errorResult } from "./helpers.js";
+import { READ, buildArgs, errorResult, listParams, listTool, str, textResult } from "./helpers.js";
 
 export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -96,34 +96,66 @@ export function registerAccountingTools(server: McpServer, m3: MoneyS3Client) {
 
   server.tool(
     "m3_predefined_entries",
-    "Query predefined accounting entries (předkontace). Read-only.",
+    "Query predefined entries (předkontace) for double-entry accounting or for tax records (daňová evidence). Read-only.",
     {
-      take: z.number().min(1).max(200).default(50),
-      skip: z.number().min(0).default(0),
-      order: z.string().optional().describe("GraphQL order clause"),
+      ledger: z.enum(["accounting", "tax"]).default("accounting").describe("accounting: accountAssignmentAccs; tax: accountAssignmentTrs"),
+      ...listParams(200, 50),
     },
     READ,
-    async ({ take, skip, order }) => {
-      try {
-        const gql = `{ accountAssignmentAccs(${buildArgs(take, skip, undefined, order)}) {
-        items { shortCut type description note accountDebits { account name } accountCredits { account name } year }
-        totalCount
-      } }`;
+    async ({ ledger, ...args }) =>
+      ledger === "accounting"
+        ? listTool(
+            m3,
+            "accountAssignmentAccs",
+            "shortCut type description note year accountDebits { account name } accountCredits { account name } vatClassification { shortCut }",
+            "Predefined Entries (accounting)",
+            args,
+            (e) =>
+              `- **${str(e.shortCut)}** (${str(e.type)}; D:${str(shortOf(e.accountDebits, "account"))} / C:${str(shortOf(e.accountCredits, "account"))}${vatOf(e)})${e.description ? ` ${e.description}` : ""}`,
+            "\n",
+          )
+        : listTool(
+            m3,
+            "accountAssignmentTrs",
+            "shortCut type description note year accountMovement { shortCut description } vatAccountingTr { shortCut } vatClassification { shortCut }",
+            "Predefined Entries (tax records)",
+            args,
+            (e) =>
+              `- **${str(e.shortCut)}** (${str(e.type)}; movement ${str(shortOf(e.accountMovement, "shortCut"))}${vatOf(e)})${e.description ? ` ${e.description}` : ""}`,
+            "\n",
+          ),
+  );
 
-        const data = await m3.query<{ accountAssignmentAccs: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const pe = data.accountAssignmentAccs;
-        if (!pe?.items?.length) return textResult("No predefined entries found.");
-
-        const lines = [`# Predefined Entries (${pe.items.length} of ${pe.totalCount})`, ""];
-        for (const e of pe.items) {
-          const ad = e.accountDebits as Record<string, unknown> | undefined;
-          const ac = e.accountCredits as Record<string, unknown> | undefined;
-          lines.push(`- **${e.shortCut ?? "—"}** (D:${ad?.account ?? "—"} / C:${ac?.account ?? "—"})${e.description ? ` — ${e.description}` : ""}`);
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+  server.tool(
+    "m3_vat_accounting",
+    "Query VAT accounting rules (rozúčtování DPH): basic and reduced rate accounts for double-entry accounting, or movements for tax records. Read-only.",
+    { ledger: z.enum(["accounting", "tax"]).default("accounting").describe("accounting: vatAccountingAccs; tax: vatAccountingTrs"), ...listParams(200, 50) },
+    READ,
+    async ({ ledger, ...args }) =>
+      ledger === "accounting"
+        ? listTool(
+            m3,
+            "vatAccountingAccs",
+            "id shortCut type description year accountDebitsBasic { account } accountCreditsBasic { account } accountDebitsReduced { account } accountCreditsReduced { account }",
+            "VAT Accounting (accounting)",
+            args,
+            (v) =>
+              `- **${str(v.shortCut)}** ${str(v.description)} (${str(v.type)}, ${str(v.year)}): basic D:${str(shortOf(v.accountDebitsBasic, "account"))} C:${str(shortOf(v.accountCreditsBasic, "account"))}, reduced D:${str(shortOf(v.accountDebitsReduced, "account"))} C:${str(shortOf(v.accountCreditsReduced, "account"))}`,
+            "\n",
+          )
+        : listTool(
+            m3,
+            "vatAccountingTrs",
+            "id shortCut type description year accountMovementBasic { shortCut } accountMovementReduced { shortCut }",
+            "VAT Accounting (tax records)",
+            args,
+            (v) =>
+              `- **${str(v.shortCut)}** ${str(v.description)} (${str(v.type)}, ${str(v.year)}): basic ${str(shortOf(v.accountMovementBasic, "shortCut"))}, reduced ${str(shortOf(v.accountMovementReduced, "shortCut"))}`,
+            "\n",
+          ),
   );
 }
+
+type Rec = Record<string, unknown>;
+const shortOf = (v: unknown, key: string) => (v as Rec | null | undefined)?.[key];
+const vatOf = (e: Rec) => (shortOf(e.vatClassification, "shortCut") ? `; VAT ${shortOf(e.vatClassification, "shortCut")}` : "");

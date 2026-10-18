@@ -18,6 +18,7 @@ import {
   partnerSchema,
   runMutation,
   str,
+  updateTool,
   vatText,
 } from "./helpers.js";
 
@@ -80,17 +81,22 @@ const itemSchema = z.object({
   vatRate: z.number().min(0).max(100).default(0).describe("VAT rate in percent, e.g. 21"),
 });
 
-const createParams = {
+// Header fields shared by create and update (update makes them all optional).
+const headerParams = {
   dateOfIssue: dateParam("Issue date"),
   dateOfTaxing: dateParam("VAT date (DUZP)"),
   dateOfMaturity: dateParam("Maturity date"),
   dateOfAccountingEvent: dateParam("Accounting event date").optional(),
-  documentNumber: z.string().optional().describe("Document number (numbered by the series if omitted)"),
   numericalSeriePrefix: z.string().optional().describe("Numerical series prefix"),
   variableSymbol: z.string().optional(),
   description: z.string().optional(),
   partner: partnerSchema.optional(),
   ...controllingParams,
+};
+
+const createParams = {
+  ...headerParams,
+  documentNumber: z.string().optional().describe("Document number (numbered by the series if omitted)"),
   items: z.array(itemSchema).min(1).describe("Invoice line items (non-stock)"),
 };
 
@@ -110,7 +116,7 @@ type CreateParams = {
   items: z.infer<typeof itemSchema>[];
 };
 
-function invoiceInput(p: CreateParams) {
+function invoiceInput(p: Partial<CreateParams>) {
   return {
     dateOfIssue: isoDate(p.dateOfIssue),
     dateOfTaxing: isoDate(p.dateOfTaxing),
@@ -122,7 +128,7 @@ function invoiceInput(p: CreateParams) {
     description: p.description,
     partnerAddress: partnerInput(p.partner),
     ...controllingInput(p),
-    items: p.items.map((it) => ({ ...it, priceType: gqlEnum("WITHOUT_VAT") })),
+    items: p.items?.map((it) => ({ ...it, priceType: gqlEnum("WITHOUT_VAT") })),
   };
 }
 
@@ -179,6 +185,22 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
         input: invoiceInput(p),
       }),
   );
+
+  for (const type of ["issued", "received"] as const) {
+    const Type = type === "issued" ? "Issued" : "Received";
+    updateTool(server, m3, {
+      name: `m3_update_${type}_invoice`,
+      what: `${type === "issued" ? "an issued" : "a received"} invoice's header (items are not changed)`,
+      key: { documentNumber: z.string().min(1).describe("Document number of the invoice to update (key)") },
+      fields: type === "issued" ? { ...headerParams, isCreditNote: z.boolean().describe("Credit note (dobropis)") } : headerParams,
+      definition: "_FP+FV",
+      mutation: `update${Type}Invoice`,
+      arg: `${type}Invoice`,
+      verifyWith: `m3_${type}_invoices`,
+      label: (p) => `Update ${type} invoice "${p.documentNumber}"`,
+      input: (p) => ({ ...invoiceInput(p as Partial<CreateParams>), documentNumber: p.documentNumber as string, isCreditNote: p.isCreditNote as boolean | undefined }),
+    });
+  }
 
   server.tool(
     "m3_delete_invoice",

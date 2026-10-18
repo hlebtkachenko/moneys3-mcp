@@ -19,6 +19,7 @@ export function defaultData(query) {
     if (op.operation === "mutation") data[name] = { guid: "00000000-0000-4000-8000-0000000000bb", isSuccess: true };
     else if (name === "importStatus") data[name] = { guid: "00000000-0000-4000-8000-0000000000bb", state: "IMPORTED", stateInfo: "Synthetic" };
     else if (name === "agendas") data[name] = { items: [{ guid: AGENDA, name: "Synthetic agenda" }] };
+    else if (name === "years") data[name] = [{ year: 2026, dateFrom: "2026-01-01T00:00:00.000+01:00", dateTo: "2026-12-31T00:00:00.000+01:00" }];
     else data[name] = { items: [], totalCount: 0 };
   }
   return data;

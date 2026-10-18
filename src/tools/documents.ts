@@ -16,12 +16,11 @@ import {
   partnerSchema,
   runMutation,
   str,
+  updateTool,
   vatText,
 } from "./helpers.js";
 
-// Field sets follow the IInternalDocument / ILiability / IReceivable entries of
-// docs/schema-summary.json. Sub-types (partnerAddress, normalItems) are not in
-// the summary: their selections are kept minimal and are unverified.
+// Field sets follow IInternalDocument / ILiability / IReceivable in docs/schema.graphql.
 const COMMON_FIELDS = `
   id year isDeleted documentNumber dateOfAccountingEvent dateOfTaxing
   description variableSymbol pairingSymbol note
@@ -65,7 +64,7 @@ function formatDoc(d: Record<string, unknown>): string {
 }
 
 function formatStockTaking(d: Record<string, unknown>): string {
-  const lines = [`## Stocktaking document id ${str(d.id)}${d.description ? `: ${d.description}` : ""}`];
+  const lines = [`## Stocktaking document ${str(d.stockTakingDocumentId)} of stocktaking ${str(d.stockTakingId)} (id ${str(d.id)}, year ${str(d.year)})${d.description ? `: ${d.description}` : ""}`];
   for (const it of (d.items as Array<Record<string, unknown>> | undefined) ?? []) {
     const art = it.article as Record<string, unknown> | undefined;
     const wh = it.warehouse as Record<string, unknown> | undefined;
@@ -75,25 +74,55 @@ function formatStockTaking(d: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-const documentParams = {
-  documentNumber: z.string().optional(),
+// Fields shared by create and update (update makes them all optional and takes documentNumber as key).
+const documentFields = {
   description: z.string().optional().describe("Document description"),
   variableSymbol: z.string().optional(),
   partner: partnerSchema.optional(),
   ...controllingParams,
 };
 
-const receivableLiabilityParams = {
+const documentParams = { ...documentFields, documentNumber: z.string().optional() };
+
+const receivableLiabilityFields = {
   dateOfIssue: dateParam("Issue date"),
   dateOfAccountingEvent: dateParam("Accounting event date").optional(),
   dateOfMaturity: dateParam("Maturity date").optional(),
   constantSymbol: z.string().optional(),
   specificSymbol: z.string().optional(),
-  ...documentParams,
+  ...documentFields,
 };
 
+const receivableLiabilityParams = { ...receivableLiabilityFields, documentNumber: z.string().optional() };
+
+const internalFields = {
+  dateOfAccountingEvent: dateParam("Date of accounting event"),
+  dateOfTaxing: dateParam("VAT date").optional(),
+  ...documentFields,
+};
+
+type Internal = Omit<ReceivableLiability, "dateOfIssue" | "dateOfMaturity" | "constantSymbol" | "specificSymbol"> & {
+  dateOfAccountingEvent?: string;
+  dateOfTaxing?: string;
+};
+
+const internalInput = (p: Internal) => ({
+  dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
+  dateOfTaxing: isoDate(p.dateOfTaxing),
+  documentNumber: p.documentNumber,
+  description: p.description,
+  variableSymbol: p.variableSymbol,
+  partnerAddress: partnerInput(p.partner),
+  ...controllingInput(p),
+});
+
+const documentKey = (what: string) => ({
+  documentNumber: z.string().min(1).describe(`Document number of the ${what} to update (key)`),
+  year: z.number().int().min(2000).max(2100).optional().describe("Accounting year of the document"),
+});
+
 type ReceivableLiability = {
-  dateOfIssue: string;
+  dateOfIssue?: string;
   dateOfAccountingEvent?: string;
   dateOfMaturity?: string;
   documentNumber?: string;
@@ -152,13 +181,11 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
     "Query stocktaking documents (inventurní doklady) with counted amounts per article and warehouse. Read-only.",
     listParams(),
     READ,
-    // Root name from 950ac9a's collection list; item field names mirror the
-    // createStockTakingDocument example in mutation_priklady.pdf (unverified for reads).
     async (args) =>
       listTool(
         m3,
         "stockTakingDocuments",
-        "id isDeleted description note items { article { catalogue description } inventoryAmount warehouse { code name } }",
+        "id stockTakingId stockTakingDocumentId year description note items { article { catalogue description } inventoryAmount warehouse { code name } }",
         "Stocktaking Documents",
         args,
         formatStockTaking,
@@ -168,12 +195,7 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_internal_document",
     "Create an internal document. Written to the Money S3 import queue; check the result with m3_import_status.",
-    {
-      dateOfAccountingEvent: dateParam("Date of accounting event"),
-      dateOfTaxing: dateParam("VAT date").optional(),
-      ...documentParams,
-      definitionShortcut: definitionParam("_ID"),
-    },
+    { ...internalFields, documentNumber: z.string().optional(), definitionShortcut: definitionParam("_ID") },
     CREATE,
     async (p) =>
       runMutation(m3, {
@@ -182,17 +204,22 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
         label: "Internal document",
         verifyWith: "m3_internal_documents",
         definitionShortcut: p.definitionShortcut,
-        input: {
-          dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
-          dateOfTaxing: isoDate(p.dateOfTaxing),
-          documentNumber: p.documentNumber,
-          description: p.description,
-          variableSymbol: p.variableSymbol,
-          partnerAddress: partnerInput(p.partner),
-          ...controllingInput(p),
-        },
+        input: internalInput(p),
       }),
   );
+
+  updateTool(server, m3, {
+    name: "m3_update_internal_document",
+    what: "an internal document's header",
+    key: documentKey("internal document"),
+    fields: internalFields,
+    definition: "_ID",
+    mutation: "updateInternalDocument",
+    arg: "internalDocument",
+    verifyWith: "m3_internal_documents",
+    label: (p) => `Update internal document "${p.documentNumber}"`,
+    input: (p) => ({ ...internalInput(p as Internal), year: p.year as number | undefined }),
+  });
 
   server.tool(
     "m3_create_liability",
@@ -225,4 +252,19 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
         input: receivableLiabilityInput(p),
       }),
   );
+
+  for (const [kind, Kind, def] of [["liability", "Liability", "_ZV"], ["receivable", "Receivable", "_PH"]] as const) {
+    updateTool(server, m3, {
+      name: `m3_update_${kind}`,
+      what: `a ${kind}'s header`,
+      key: documentKey(kind),
+      fields: receivableLiabilityFields,
+      definition: def,
+      mutation: `update${Kind}`,
+      arg: kind,
+      verifyWith: kind === "liability" ? "m3_liabilities" : "m3_receivables",
+      label: (p) => `Update ${kind} "${p.documentNumber}"`,
+      input: (p) => ({ ...receivableLiabilityInput(p as ReceivableLiability), year: p.year as number | undefined }),
+    });
+  }
 }

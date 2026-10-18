@@ -18,10 +18,11 @@ import {
   runMutation,
   str,
   textResult,
+  updateTool,
   vatText,
 } from "./helpers.js";
 
-// Fields shared by IBankStatement and ICashVoucher (docs/schema-summary.json).
+// Fields shared by IBankStatement and ICashVoucher (docs/schema.graphql).
 // partnerAddress { address } was fixed against a live server in 6dca522.
 const PAYMENT_FIELDS = `
   id year isDeleted documentNumber isExpense dateOfIssue dateOfPayment dateOfAccountingEvent
@@ -69,17 +70,45 @@ function formatPaymentDoc(d: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-const paymentParams = {
+// Fields shared by create and update (update makes them all optional and takes documentNumber as key).
+const paymentFields = {
   dateOfIssue: dateParam("Issue date"),
   dateOfAccountingEvent: dateParam("Accounting event date").optional(),
   dateOfPayment: dateParam("Payment date").optional(),
-  documentNumber: z.string().optional(),
   isExpense: z.boolean().optional().describe("True for expense (výdej), false for receipt (příjem)"),
   variableSymbol: z.string().optional(),
   partner: partnerSchema.optional(),
   ...controllingParams,
   description: z.string().optional().describe("Description"),
 };
+
+const paymentParams = { ...paymentFields, documentNumber: z.string().optional() };
+
+const bankFields = {
+  constantSymbol: z.string().optional(),
+  specificSymbol: z.string().optional(),
+  bankStatementNumber: z.number().int().positive().optional(),
+  bankAccountCode: z.string().optional().describe("Bank account shortcut (see m3_bank_accounts)"),
+};
+
+const cashFields = { cashBoxCode: z.string().optional().describe("Cash box shortcut (see m3_bank_accounts)") };
+
+type BankExtra = { constantSymbol?: string; specificSymbol?: string; bankStatementNumber?: number; bankAccountCode?: string };
+
+const bankInput = (p: Partial<PaymentParams> & BankExtra) => ({
+  ...paymentInput(p),
+  constantSymbol: p.constantSymbol,
+  specificSymbol: p.specificSymbol,
+  bankStatementNumber: p.bankStatementNumber,
+  bankAccount: p.bankAccountCode ? { shortCut: p.bankAccountCode } : undefined,
+});
+
+const cashInput = (p: Partial<PaymentParams> & { cashBoxCode?: string }) => ({
+  ...paymentInput(p),
+  cashBox: p.cashBoxCode ? { shortCut: p.cashBoxCode } : undefined,
+});
+
+const documentKey = (what: string) => ({ documentNumber: z.string().min(1).describe(`Document number of the ${what} to update (key)`) });
 
 type PaymentParams = {
   dateOfIssue: string;
@@ -95,7 +124,7 @@ type PaymentParams = {
   description?: string;
 };
 
-function paymentInput(p: PaymentParams) {
+function paymentInput(p: Partial<PaymentParams>) {
   return {
     dateOfIssue: isoDate(p.dateOfIssue),
     dateOfAccountingEvent: isoDate(p.dateOfAccountingEvent),
@@ -129,14 +158,7 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_bank_document",
     "Create a bank document. Written to the Money S3 import queue; check the result with m3_import_status.",
-    {
-      ...paymentParams,
-      constantSymbol: z.string().optional(),
-      specificSymbol: z.string().optional(),
-      bankStatementNumber: z.number().int().positive().optional(),
-      bankAccountCode: z.string().optional().describe("Bank account shortcut (see m3_bank_accounts)"),
-      definitionShortcut: definitionParam("_BD"),
-    },
+    { ...paymentParams, ...bankFields, definitionShortcut: definitionParam("_BD") },
     CREATE,
     async (p) =>
       runMutation(m3, {
@@ -145,22 +167,30 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
         label: "Bank document",
         verifyWith: "m3_bank_documents",
         definitionShortcut: p.definitionShortcut,
-        input: {
-          ...paymentInput(p),
-          constantSymbol: p.constantSymbol,
-          specificSymbol: p.specificSymbol,
-          bankStatementNumber: p.bankStatementNumber,
-          bankAccount: p.bankAccountCode ? { shortCut: p.bankAccountCode } : undefined,
-        },
+        input: bankInput(p),
       }),
   );
+
+  // Bank documents may also be matched on bank account + statement item, per the definition's key.
+  updateTool(server, m3, {
+    name: "m3_update_bank_document",
+    what: "a bank document's header",
+    key: documentKey("bank document"),
+    fields: { ...paymentFields, ...bankFields },
+    definition: "_BD",
+    mutation: "updateBankStatement",
+    arg: "bankStatement",
+    verifyWith: "m3_bank_documents",
+    label: (p) => `Update bank document "${p.documentNumber}"`,
+    input: (p) => ({ ...bankInput(p as Partial<PaymentParams> & BankExtra), documentNumber: p.documentNumber as string }),
+  });
 
   server.tool(
     "m3_create_cash_desk_document",
     "Create a cash desk document. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
       ...paymentParams,
-      cashBoxCode: z.string().optional().describe("Cash box shortcut (see m3_bank_accounts)"),
+      ...cashFields,
       // Default from the official cash voucher example (mutation_priklady.pdf).
       definitionShortcut: definitionParam("_PD"),
     },
@@ -172,9 +202,22 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
         label: "Cash desk document",
         verifyWith: "m3_cash_desk_documents",
         definitionShortcut: p.definitionShortcut,
-        input: { ...paymentInput(p), cashBox: p.cashBoxCode ? { shortCut: p.cashBoxCode } : undefined },
+        input: cashInput(p),
       }),
   );
+
+  updateTool(server, m3, {
+    name: "m3_update_cash_desk_document",
+    what: "a cash desk document's header",
+    key: documentKey("cash desk document"),
+    fields: { ...paymentFields, ...cashFields },
+    definition: "_PD",
+    mutation: "updateCashVoucher",
+    arg: "cashVoucher",
+    verifyWith: "m3_cash_desk_documents",
+    label: (p) => `Update cash desk document "${p.documentNumber}"`,
+    input: (p) => ({ ...cashInput(p as Partial<PaymentParams> & { cashBoxCode?: string }), documentNumber: p.documentNumber as string }),
+  });
 
   server.tool(
     "m3_bank_accounts",

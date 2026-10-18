@@ -18,11 +18,89 @@ import {
   runMutation,
   str,
   textResult,
+  updateTool,
+  type GqlInput,
 } from "./helpers.js";
 
-// Article fields mirror the warehouseStocks.article example in query_priklady.pdf;
-// the `articles` root itself is not in the schema summary (unverified).
 const ARTICLE_FIELDS = "id guid catalogue description barCode plu weight articleItemType";
+
+const articleFields = {
+  description: z.string().min(1).describe("Article name (popis zásoby)"),
+  barCode: z.string().optional().describe("Barcode (EAN)"),
+  plu: z.string().optional().describe("PLU"),
+  weight: z.number().optional().describe("Weight per unit"),
+};
+
+// Received slip header, shared by create and update.
+const slipFields = {
+  dateOfIssue: dateParam("Issue date"),
+  dateOfStockMovement: dateParam("Stock movement date").optional(),
+  variableSymbol: z.string().optional(),
+  partner: partnerSchema.optional(),
+  ...controllingParams,
+};
+
+type Slip = {
+  dateOfIssue: string;
+  dateOfStockMovement?: string;
+  documentNumber?: string;
+  variableSymbol?: string;
+  partner?: z.infer<typeof partnerSchema>;
+  costCenterCode?: string;
+  projectCode?: string;
+  activityCode?: string;
+};
+
+const slipInput = (p: Slip) => ({
+  dateOfIssue: isoDate(p.dateOfIssue),
+  dateOfStockMovement: isoDate(p.dateOfStockMovement),
+  documentNumber: p.documentNumber,
+  variableSymbol: p.variableSymbol,
+  partnerAddress: partnerInput(p.partner),
+  ...controllingInput(p),
+});
+
+// StockTakingDocumentInput requires both IDs (docs/schema.graphql), although
+// the official example in mutation_priklady.pdf leaves them out.
+const stockTakingKey = {
+  stockTakingId: z.number().int().positive().describe("ID of the stocktaking (inventura), see m3_stock_takings"),
+  stockTakingDocumentId: z.number().int().positive().describe("Number of this document within the stocktaking (key)"),
+};
+
+const stockItemRef = {
+  catalogue: z.string().min(1).describe("Article catalogue number"),
+  warehouseCode: z.string().min(1).describe("Warehouse code (see m3_stock_lists)"),
+};
+
+const stockTakingFields = {
+  description: z.string().optional(),
+  note: z.string().optional(),
+  checkedByEmployee: z.string().optional(),
+  items: z.array(
+    z.object({
+      ...stockItemRef,
+      inventoryAmount: z.number().min(0).describe("Counted quantity"),
+    }),
+  ),
+};
+
+type StockTaking = {
+  stockTakingId: number;
+  stockTakingDocumentId: number;
+  description?: string;
+  note?: string;
+  checkedByEmployee?: string;
+  items?: Array<{ catalogue: string; warehouseCode: string; inventoryAmount: number }>;
+};
+
+const stockTakingInput = (p: StockTaking) => ({
+  stockTakingId: p.stockTakingId,
+  stockTakingDocumentId: p.stockTakingDocumentId,
+  description: p.description,
+  note: p.note,
+  checkedByEmployee: p.checkedByEmployee,
+  items: p.items?.map((it) => ({ article: { catalogue: it.catalogue }, inventoryAmount: it.inventoryAmount, warehouse: { code: it.warehouseCode } })),
+});
 
 export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
@@ -48,12 +126,12 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       try {
         const [wh, pl] = await Promise.all([
           m3.query<{ warehouses: { items: Record<string, unknown>[] } }>(`{ warehouses(take: 100) { items { id code name } totalCount } }`),
-          m3.query<{ priceLevels: { items: Record<string, unknown>[] } }>(`{ priceLevels(take: 100) { items { id shortCut name } totalCount } }`),
+          m3.query<{ priceLevels: { items: Record<string, unknown>[] } }>(`{ priceLevels(take: 100) { items { shortCut name } totalCount } }`),
         ]);
         const lines = ["# Stock Lists", "", "## Warehouses"];
         for (const w of wh.warehouses?.items ?? []) lines.push(`- ${str(w.name)} (code: ${str(w.code)}, id: ${str(w.id, "?")})`);
         lines.push("", "## Price Levels");
-        for (const p of pl.priceLevels?.items ?? []) lines.push(`- ${str(p.name)} (shortCut: ${str(p.shortCut)}, id: ${str(p.id, "?")})`);
+        for (const p of pl.priceLevels?.items ?? []) lines.push(`- ${str(p.name)} (shortCut: ${str(p.shortCut)})`);
         return textResult(lines.join("\n"));
       } catch (err) {
         return errorResult((err as Error).message);
@@ -70,7 +148,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       listTool(
         m3,
         "receivedSlips",
-        `id year isDeleted documentNumber dateOfIssue totalWithVatHc description
+        `id year documentNumber dateOfIssue totalWithVatHc description
          partnerAddress { businessAddress { name } identificationNumber }
          centre { shortCut name } jobOrder { shortCut name } operation { shortCut name }`,
         "Stock Documents",
@@ -94,14 +172,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_create_stock_card",
     "Create a stock card (article). Written to the Money S3 import queue; check the result with m3_import_status.",
-    {
-      catalogue: z.string().min(1).describe("Catalogue number (katalog)"),
-      description: z.string().min(1).describe("Article name (popis zásoby)"),
-      barCode: z.string().optional().describe("Barcode (EAN)"),
-      plu: z.string().optional().describe("PLU"),
-      weight: z.number().optional().describe("Weight per unit"),
-      definitionShortcut: definitionParam("_zSK"),
-    },
+    { catalogue: z.string().min(1).describe("Catalogue number (katalog)"), ...articleFields, definitionShortcut: definitionParam("_zSK") },
     CREATE,
     // Field names from the article examples in mutation_priklady.pdf and query_priklady.pdf.
     async ({ definitionShortcut, ...article }) =>
@@ -115,21 +186,33 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       }),
   );
 
+  // Stock cards are matched on catalogue, barcode, GUID or PLU, as set in the definition.
+  updateTool(server, m3, {
+    name: "m3_update_stock_card",
+    what: "a stock card (article)",
+    key: {
+      catalogue: z.string().min(1).describe("Catalogue number of the card to update (key)"),
+      guid: z.guid().optional().describe("Article GUID, when the definition matches on GUID"),
+    },
+    fields: { ...articleFields, description: z.string().min(1).describe("Article name (popis zásoby)") },
+    definition: "_zSK",
+    mutation: "updateArticle",
+    arg: "article",
+    verifyWith: "m3_stock_cards",
+    label: (p) => `Update stock card "${p.catalogue}"`,
+    input: (p) => ({ catalogue: p.catalogue, guid: p.guid, description: p.description, barCode: p.barCode, plu: p.plu, weight: p.weight }) as GqlInput,
+  });
+
   server.tool(
     "m3_create_stock_document",
     "Create a received stock slip (příjemka) with stock items. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      dateOfIssue: dateParam("Issue date"),
-      dateOfStockMovement: dateParam("Stock movement date").optional(),
+      ...slipFields,
       documentNumber: z.string().optional(),
-      variableSymbol: z.string().optional(),
-      partner: partnerSchema.optional(),
-      ...controllingParams,
       items: z
         .array(
           z.object({
-            catalogue: z.string().min(1).describe("Article catalogue number"),
-            warehouseCode: z.string().min(1).describe("Warehouse code (see m3_stock_lists)"),
+            ...stockItemRef,
             quantity: z.number().min(0).describe("Quantity"),
             unitPrice: z.number().describe("Unit price"),
           }),
@@ -147,12 +230,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
         verifyWith: "m3_stock_documents",
         definitionShortcut: p.definitionShortcut,
         input: {
-          dateOfIssue: isoDate(p.dateOfIssue),
-          dateOfStockMovement: isoDate(p.dateOfStockMovement),
-          documentNumber: p.documentNumber,
-          variableSymbol: p.variableSymbol,
-          partnerAddress: partnerInput(p.partner),
-          ...controllingInput(p),
+          ...slipInput(p),
           // The official example sends the quantity as unitOfMeasure ("počet kusů").
           items: p.items.map((it) => ({
             article: { catalogue: it.catalogue },
@@ -164,23 +242,37 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       }),
   );
 
+  updateTool(server, m3, {
+    name: "m3_update_stock_document",
+    what: "a received stock slip's description, title, note and texts (Money S3 updates only these header fields on stock documents)",
+    key: { documentNumber: z.string().min(1).describe("Document number of the stock slip to update (key)") },
+    fields: {
+      description: z.string().describe("Description (popis dokladu)"),
+      documentTitle: z.string().describe("Document title (nadpis dokladu)"),
+      note: z.string().describe("Note"),
+      textBeforePrices: z.string().describe("Text before prices"),
+      textBehindPrices: z.string().describe("Text after prices"),
+    },
+    definition: "_S",
+    mutation: "updateReceivedSlip",
+    arg: "receivedSlip",
+    verifyWith: "m3_stock_documents",
+    label: (p) => `Update stock document "${p.documentNumber}"`,
+    // UpdateInStoreDocument requires items; stock documents ignore item changes on update
+    // ("Opravy – na skladových dokladech vždy dojde k aktualizaci pouze vybraných údajů na hlavičce", xml_prenosy.pdf).
+    input: (p) => {
+      const { definitionShortcut: _, ...fields } = p;
+      return { ...(fields as Record<string, GqlInput>), items: [] };
+    },
+  });
+
   server.tool(
     "m3_create_inventory_document",
     "Create a stocktaking document (inventurní doklad) with counted amounts. Written to the Money S3 import queue; check the result with m3_import_status.",
     {
-      description: z.string().optional(),
-      note: z.string().optional(),
-      stockTakingId: z.number().int().positive().optional().describe("ID of the stocktaking (inventura) to attach to"),
-      checkedByEmployee: z.string().optional(),
-      items: z
-        .array(
-          z.object({
-            catalogue: z.string().min(1).describe("Article catalogue number"),
-            warehouseCode: z.string().min(1).describe("Warehouse code (see m3_stock_lists)"),
-            inventoryAmount: z.number().min(0).describe("Counted quantity"),
-          }),
-        )
-        .min(1),
+      ...stockTakingKey,
+      ...stockTakingFields,
+      items: stockTakingFields.items.min(1),
       // Default from the official stocktaking example (mutation_priklady.pdf).
       definitionShortcut: definitionParam("_INVD"),
     },
@@ -192,17 +284,41 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
         label: "Stocktaking document",
         verifyWith: "m3_inventory_documents",
         definitionShortcut: p.definitionShortcut,
-        input: {
-          description: p.description,
-          note: p.note,
-          stockTakingId: p.stockTakingId,
-          checkedByEmployee: p.checkedByEmployee,
-          items: p.items.map((it) => ({
-            article: { catalogue: it.catalogue },
-            inventoryAmount: it.inventoryAmount,
-            warehouse: { code: it.warehouseCode },
-          })),
-        },
+        input: stockTakingInput(p),
       }),
+  );
+
+  updateTool(server, m3, {
+    name: "m3_update_inventory_document",
+    what: "a stocktaking document; items given are sent as counted amounts",
+    key: stockTakingKey,
+    fields: stockTakingFields,
+    definition: "_INVD",
+    mutation: "updateStockTakingDocument",
+    arg: "stockTakingDocument",
+    verifyWith: "m3_inventory_documents",
+    label: (p) => `Update stocktaking document ${p.stockTakingDocumentId} of stocktaking ${p.stockTakingId}`,
+    input: (p) => stockTakingInput(p as StockTaking),
+  });
+
+  server.tool(
+    "m3_stock_takings",
+    "Query stocktakings (inventury) with state, dates and type; their IDs are the stockTakingId of inventory documents. Read-only.",
+    listParams(),
+    READ,
+    async (args) =>
+      listTool(
+        m3,
+        "stockTakings",
+        "id year stockTakingNumber description state dateOfStockTaking dateOfClosed note stockTakingType { shortCut name }",
+        "Stocktakings",
+        args,
+        (t) =>
+          [
+            `## ${str(t.stockTakingNumber)} (id ${str(t.id)}, year ${str(t.year)})${t.description ? `: ${t.description}` : ""}`,
+            `- State: ${str(t.state)} | Date: ${str(t.dateOfStockTaking)} | Closed: ${str(t.dateOfClosed)} | Type: ${str((t.stockTakingType as Record<string, unknown> | undefined)?.name)}`,
+            ...(t.note ? [`- Note: ${t.note}`] : []),
+          ].join("\n"),
+      ),
   );
 }

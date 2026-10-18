@@ -1,86 +1,68 @@
 // Shared by scripts/check-contract.mjs and the tests: sample tool arguments and
-// validate GraphQL documents against docs/schema-summary.json.
-// The summary covers 16 query types and 11 mutation input types (top-level
-// fields only). Anything outside it is reported as "unverified", not as valid.
+// validate GraphQL documents against docs/schema.graphql, the full schema from
+// live introspection of Money S3 (npm run introspect).
 import fs from "node:fs";
-import { Kind, parse } from "graphql";
+import {
+  GraphQLScalarType,
+  Kind,
+  TypeInfo,
+  buildSchema,
+  getNamedType,
+  parse,
+  validate as validateDocument,
+  visit,
+  visitWithTypeInfo,
+} from "graphql";
 
-const summary = JSON.parse(fs.readFileSync(new URL("../docs/schema-summary.json", import.meta.url), "utf8"));
-const OUT = Object.fromEntries(Object.entries(summary.queryTypes).map(([t, v]) => [t, Object.fromEntries(v.fields.map((f) => [f.name, f.type]))]));
-const IN = Object.fromEntries(Object.entries(summary.mutationInputTypes).map(([t, v]) => [t, Object.fromEntries(v.inputFields.map((f) => [f.name, f.type]))]));
+const schema = buildSchema(fs.readFileSync(new URL("../docs/schema.graphql", import.meta.url), "utf8"));
 
-const ROOT_QUERIES = {
-  issuedInvoices: "IIssuedInvoice", receivedInvoices: "IReceivedInvoice", cashVouchers: "ICashVoucher",
-  bankStatements: "IBankStatement", internalDocuments: "IInternalDocument", liabilities: "ILiability",
-  receivables: "IReceivable", accountCharts: "IAccountChart", companies: "ICompany", centres: "ICentre",
-  accountAssignmentAccs: "IAccountAssignmentAcc", journalAccs: "IJournalAcc", bankAccountCashBoxes: "IBankAccountCashBox",
-  numericalSeries: "INumericalSerie", activities: "IActivity", jobOrders: "IJobOrder",
-};
-const ROOT_MUTATIONS = {
-  createIssuedInvoice: "IssuedInvoiceInput", createReceivedInvoice: "ReceivedInvoiceInput", createCashVoucher: "CashVoucherInput",
-  createBankStatement: "BankStatementInput", createInternalDocument: "InternalDocumentInput", createCompany: "CompanyInput",
-  createAccountChart: "AccountChartInput", createCentre: "CentreInput", createAccountAssignmentAcc: "AccountAssignmentAccInput",
-  createLiability: "LiabilityInput", createReceivable: "ReceivableInput",
-};
-const SCALARS = { Date: Kind.STRING, String: Kind.STRING, UUID: Kind.STRING, Boolean: Kind.BOOLEAN, Int: [Kind.INT], Decimal: [Kind.INT, Kind.FLOAT] };
-const bare = (t) => t.replace(/[[\]!]/g, "");
-
-function checkSelection(type, selection, path, acc) {
-  for (const s of selection.selections) {
-    const name = s.name.value;
-    if (!(name in OUT[type])) {
-      acc.errors.push(`${path}.${name} is not a field of ${type}`);
-      continue;
-    }
-    acc.checked++;
-    const next = bare(OUT[type][name]);
-    if (s.selectionSet) {
-      if (OUT[next]) checkSelection(next, s.selectionSet, `${path}.${name}`, acc);
-      else acc.unverified.push(`${path}.${name} { } (${next})`);
-    }
-  }
+// SDL custom scalars accept any literal; pin the ones tools send to the literal
+// kinds Money S3 accepts, so a quoted number or an unquoted date fails here.
+const LITERALS = { Date: [Kind.STRING], DateTime: [Kind.STRING], UUID: [Kind.STRING], Decimal: [Kind.INT, Kind.FLOAT], Long: [Kind.INT] };
+for (const [name, kinds] of Object.entries(LITERALS)) {
+  const type = schema.getType(name);
+  if (!(type instanceof GraphQLScalarType)) continue;
+  type.parseLiteral = (ast) => {
+    if (!kinds.includes(ast.kind)) throw new TypeError(`${ast.kind} literal for ${name}`);
+    return ast.kind === Kind.STRING ? ast.value : Number(ast.value);
+  };
 }
 
-function checkInput(type, obj, path, acc) {
-  if (!IN[type]) {
-    acc.unverified.push(`${path} (${type})`);
-    return;
-  }
-  for (const f of obj.fields) {
-    const name = f.name.value;
-    if (!(name in IN[type])) {
-      acc.errors.push(`${path}.${name} is not a field of ${type}`);
-      continue;
-    }
-    acc.checked++;
-    const next = bare(IN[type][name]);
-    const values = f.value.kind === Kind.LIST ? f.value.values : [f.value];
-    for (const v of values) {
-      if (v.kind === Kind.OBJECT) checkInput(next, v, `${path}.${name}`, acc);
-      else if (SCALARS[next] && ![SCALARS[next]].flat().includes(v.kind)) acc.errors.push(`${path}.${name}: ${v.kind} literal for ${next}`);
-      else if (!SCALARS[next] && v.kind === Kind.STRING) acc.errors.push(`${path}.${name}: string literal for enum/object ${next}`);
-    }
-  }
+// Fields marked @legislationDirective(legislationType: SK) fail at runtime on
+// Czech agendas ("Member is available only for 'Sk' legislation").
+const isSkOnly = (def) =>
+  def?.astNode?.directives?.some((d) => d.name.value === "legislationDirective" && d.arguments.some((a) => a.value.value === "SK"));
+
+/** Field and input-field paths of a valid document that only Slovak agendas accept. */
+function skOnly(doc) {
+  const typeInfo = new TypeInfo(schema);
+  const found = [];
+  visit(doc, visitWithTypeInfo(typeInfo, {
+    Field(node) {
+      const parent = typeInfo.getParentType();
+      if (isSkOnly(typeInfo.getFieldDef())) found.push(`${parent}.${node.name.value} is SK-legislation only`);
+    },
+    ObjectField(node) {
+      const parent = getNamedType(typeInfo.getParentInputType());
+      if (isSkOnly(parent?.getFields?.()[node.name.value])) found.push(`${parent}.${node.name.value} is SK-legislation only`);
+    },
+  }));
+  return found;
 }
 
-/** Validates one document. Returns { errors, unverified, checked }. Syntax errors throw. */
+/**
+ * Validates one document against the live schema. Returns { errors, skOnly }:
+ * GraphQL validation errors, and fields that work only on Slovak agendas.
+ * Syntax errors throw.
+ */
 export function validate(gql) {
-  const acc = { errors: [], unverified: [], checked: 0 };
-  const op = parse(gql).definitions[0];
-  for (const root of op.selectionSet.selections) {
-    const name = root.name.value;
-    if (op.operation === "query") {
-      const items = root.selectionSet?.selections.find((s) => s.name.value === "items");
-      if (ROOT_QUERIES[name] && items) checkSelection(ROOT_QUERIES[name], items.selectionSet, `${name}.items`, acc);
-      else acc.unverified.push(`query ${name}`);
-    } else {
-      const arg = root.arguments.find((a) => a.name.value !== "definitionXMLTransfer");
-      if (ROOT_MUTATIONS[name]) checkInput(ROOT_MUTATIONS[name], arg.value, `${name}(${arg.name.value})`, acc);
-      else acc.unverified.push(`mutation ${name}`);
-    }
-  }
-  return acc;
+  const doc = parse(gql);
+  const errors = validateDocument(schema, doc).map((e) => e.message);
+  return { errors, skOnly: errors.length ? [] : skOnly(doc) };
 }
+
+/** Tools that exist for Slovak agendas only; their SK-only fields are expected. */
+export const SK_TOOLS = new Set(["m3_vat_purposes"]);
 
 const SKIP_KEYS = new Set(["where", "order"]);
 const BY_KEY = { year: 2026, month: 3, countryCode: "CZ", guid: "00000000-0000-4000-8000-000000000001" };
@@ -104,8 +86,22 @@ function sample(schema, key = "", requiredOnly = false) {
   }
 }
 
+/**
+ * Every call the contract check makes for a tool: all fields, required fields
+ * only, and all fields once per further value of each top-level enum argument
+ * (so m3_orders also sends issuedOrders, m3_code_lists every list).
+ */
+export function callsFor(tool) {
+  const full = argsFor(tool);
+  const calls = [{ label: "full", args: full, requiredOnly: false }, { label: "required", args: argsFor(tool, true), requiredOnly: true }];
+  for (const [key, prop] of Object.entries(tool.inputSchema.properties ?? {})) {
+    for (const value of (prop.enum ?? []).slice(1)) calls.push({ label: `${key}=${value}`, args: { ...full, [key]: value }, requiredOnly: false });
+  }
+  return calls;
+}
+
 /** Arguments for one tool call; m3_graphql gets a fixed read-only document. */
-export function argsFor(tool, requiredOnly = false) {
+function argsFor(tool, requiredOnly = false) {
   if (tool.name === "m3_graphql") return { query: "{ centres(take: 1) { items { shortCut } totalCount } }" };
   return sample(tool.inputSchema, "", requiredOnly);
 }

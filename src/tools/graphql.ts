@@ -122,7 +122,7 @@ export function registerGraphQLTools(server: McpServer, m3: MoneyS3Client) {
       listTool(
         m3,
         type === "received" ? "receivedOrders" : "issuedOrders",
-        `id year isDeleted documentNumber variableSymbol dateOfIssue description
+        `id year documentNumber variableSymbol dateOfIssue description
          partnerAddress { businessAddress { name } identificationNumber }
          items { description amount unitPriceHc vatRate }`,
         type === "received" ? "Received Orders" : "Issued Orders",

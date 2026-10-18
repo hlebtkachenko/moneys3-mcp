@@ -1,104 +1,72 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MoneyS3Client } from "../moneys3-client.js";
-import { READ, buildArgs, textResult, errorResult } from "./helpers.js";
+import { READ, listParams, listTool, str } from "./helpers.js";
+
+// Personal data history lives in employeeTimePeriods; the open period
+// (dateTo empty or 0001-01-01) is the current one. Birth numbers are not read.
+const EMPLOYEE_FIELDS = `
+  id personalNumber titleBefore firstName lastName titleAfter note
+  employmentRelationships { id description dateOfStart dateOfEnd employmentType { name } centre { shortCut name } }
+  employeeTimePeriods { dateFrom dateTo phone mobile email residenceAddress { street buildingNumber municipality municipalityPostCode { postalCode } } }
+`;
+
+type Rec = Record<string, unknown>;
+const day = (v: unknown) => (typeof v === "string" && !v.startsWith("0001-") ? v.slice(0, 10) : undefined);
+
+function formatEmployee(e: Rec): string {
+  const periods = (e.employeeTimePeriods as Rec[] | undefined) ?? [];
+  const current = periods.find((p) => !day(p.dateTo)) ?? periods.at(-1);
+  const addr = current?.residenceAddress as Rec | undefined;
+  const postal = (addr?.municipalityPostCode as Rec | undefined)?.postalCode;
+  const name = [e.titleBefore, e.firstName, e.lastName, e.titleAfter].filter(Boolean).join(" ");
+  const lines = [`## ${name || "Unnamed"} (#${str(e.personalNumber, str(e.id, "?"))}, id ${str(e.id)})`];
+  const street = [addr?.street, addr?.buildingNumber].filter(Boolean).join(" ");
+  const address = [street, addr?.municipality, postal].filter(Boolean).join(", ");
+  if (address) lines.push(`- Address: ${address}`);
+  const contact = [current?.email, current?.phone, current?.mobile].filter(Boolean);
+  if (contact.length) lines.push(`- Contact: ${contact.join(" | ")}`);
+  for (const r of (e.employmentRelationships as Rec[] | undefined) ?? []) {
+    const cc = r.centre as Rec | undefined;
+    const end = day(r.dateOfEnd);
+    lines.push(
+      `- Employment ${str(r.id)}: ${str((r.employmentType as Rec | undefined)?.name ?? r.description)}, from ${str(day(r.dateOfStart))}${end ? ` to ${end}` : ""}${cc?.shortCut ? ` (CC ${cc.shortCut})` : ""}`,
+    );
+  }
+  if (e.note) lines.push(`- Note: ${e.note}`);
+  return lines.join("\n");
+}
 
 export function registerPayrollTools(server: McpServer, m3: MoneyS3Client) {
   server.tool(
     "m3_employees",
-    "Query employees with full detail: address, contact, employment dates, cost center, employment type. Read-only.",
-    {
-      take: z.number().min(1).max(100).default(50),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
+    "Query employees with employment relationships (type, dates, cost center) and the current address and contact. Read-only.",
+    listParams(100, 50),
     READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        // The employee type is not in the schema summary: address and centre use the
-        // address / controlling shapes of the documented types (unverified).
-        const gql = `{ employees(${buildArgs(take, skip, where, order)}) {
-        items {
-          id personalNumber firstName lastName
-          dateOfBirth dateOfEntry dateOfDeparture
-          address { street municipality municipalityPostalCode { postalCode } countryName }
-          contact { email phone mobile }
-          position department
-          centre { shortCut name }
-          employmentType
-          note
-        }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ employees: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const emp = data.employees;
-        if (!emp?.items?.length) return textResult("No employees found.");
-
-        const lines = [`# Employees (${emp.items.length} of ${emp.totalCount})`, ""];
-        for (const e of emp.items) {
-          const addr = e.address as Record<string, unknown> | undefined;
-          const ct = e.contact as Record<string, unknown> | undefined;
-          const cc = e.centre as Record<string, unknown> | undefined;
-
-          lines.push(`## ${e.firstName ?? ""} ${e.lastName ?? ""} (#${e.personalNumber ?? e.id ?? "?"})`);
-          lines.push(`- Position: ${e.position ?? "—"} | Department: ${e.department ?? "—"} | Type: ${e.employmentType ?? "—"}`);
-          lines.push(`- Entry: ${e.dateOfEntry ?? "—"}${e.dateOfDeparture ? ` | Departure: ${e.dateOfDeparture}` : ""}`);
-          if (cc?.shortCut) lines.push(`- Cost center: ${cc.shortCut} (${cc.name ?? "—"})`);
-          if (addr) lines.push(`- Address: ${[addr.street, addr.municipality, (addr.municipalityPostalCode as Record<string, unknown> | undefined)?.postalCode, addr.countryName].filter(Boolean).join(", ") || "—"}`);
-          if (ct) {
-            const parts = [ct.email, ct.phone, ct.mobile].filter(Boolean);
-            if (parts.length > 0) lines.push(`- Contact: ${parts.join(" | ")}`);
-          }
-          if (e.note) lines.push(`- Note: ${e.note}`);
-          lines.push("");
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+    async (args) => listTool(m3, "employees", EMPLOYEE_FIELDS, "Employees", args, formatEmployee),
   );
 
   server.tool(
     "m3_service_repairs",
-    "Query service and repair records. Read-only.",
-    {
-      take: z.number().min(1).max(100).default(20),
-      skip: z.number().min(0).default(0),
-      where: z.string().optional().describe("GraphQL where filter"),
-      order: z.string().optional().describe("GraphQL order clause"),
-    },
+    "Query service or repair documents (servis, opravy) with dates, partner contact and cost center. Read-only.",
+    { type: z.enum(["services", "repairs"]).default("services").describe("Service or repair documents"), ...listParams() },
     READ,
-    async ({ take, skip, where, order }) => {
-      try {
-        const gql = `{ services(${buildArgs(take, skip, where, order)}) {
-        items {
-          id documentNumber dateOfIssue
-          description
-          centre { shortCut name }
-        }
-        totalCount
-      } }`;
-
-        const data = await m3.query<{ services: { items: Record<string, unknown>[]; totalCount: number } }>(gql);
-        const sr = data.services;
-        if (!sr?.items?.length) return textResult("No service/repair records found.");
-
-        const lines = [`# Service & Repairs (${sr.items.length} of ${sr.totalCount})`, ""];
-        for (const r of sr.items) {
+    async ({ type, ...args }) =>
+      listTool(
+        m3,
+        type,
+        "id documentNumber dateOfIssue dateOfSettleBy description phoneNumber email centre { shortCut name }",
+        type === "services" ? "Service Documents" : "Repair Documents",
+        args,
+        (r) => {
           const cc = r.centre as Record<string, unknown> | undefined;
-
-          lines.push(`## ${r.documentNumber ?? "—"} (${r.dateOfIssue ?? "—"})`);
-          if (cc?.shortCut) lines.push(`- Cost center: ${cc.shortCut} (${cc.name ?? "—"})`);
+          const lines = [`## ${str(r.documentNumber)} (${str(r.dateOfIssue)}; id ${str(r.id)})`];
+          if (cc?.shortCut) lines.push(`- Cost center: ${cc.shortCut} (${str(cc.name)})`);
+          const contact = [r.email, r.phoneNumber].filter(Boolean);
+          if (contact.length) lines.push(`- Contact: ${contact.join(" | ")}`);
           if (r.description) lines.push(`- ${r.description}`);
-          lines.push("");
-        }
-        return textResult(lines.join("\n"));
-      } catch (err) {
-        return errorResult((err as Error).message);
-      }
-    },
+          return lines.join("\n");
+        },
+      ),
   );
 }

@@ -1,5 +1,6 @@
 import { Kind, parseValue } from "graphql";
 import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { MoneyS3Client } from "../moneys3-client.js";
 
 // GraphQL literal encoding.
@@ -50,10 +51,6 @@ function gqlValue(value: GqlInput): string | undefined {
   }
   return fields.length ? `{ ${fields.join(", ")} }` : undefined;
 }
-
-/** The schema summary lists no enum values, so only the enum-name shape is checked. */
-export const enumParam = () =>
-  z.string().regex(ENUM_RE, "Expected an enum name (A-Z, 0-9, _), e.g. ACTIVE");
 
 // Dates: the official mutation examples (mutation_priklady.pdf) send every
 // date as ISO "YYYY-MM-DD". Tools accept ISO or DD.MM.YYYY and send ISO.
@@ -210,6 +207,7 @@ export function errorResult(text: string) {
 export const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 export const CREATE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 export const DELETE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
+const UPDATE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
 export const RAW = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 
 export interface MutationSpec {
@@ -228,7 +226,7 @@ function buildMutation(spec: MutationSpec): string {
 }
 
 /**
- * Sends a create/delete mutation. Writes go into Money S3's import queue:
+ * Sends a create/update/delete mutation. Writes go into Money S3's import queue:
  * isSuccess=true means queued, not yet imported. isSuccess=false or a missing
  * result is an error.
  */
@@ -284,4 +282,56 @@ export async function listTool(
   } catch (err) {
     return errorResult((err as Error).message);
   }
+}
+
+// Updates
+
+const UPDATE_NOTE =
+  "Goes through the Money S3 import queue like a create. Money S3 finds the existing record by its key (the XML transfer " +
+  "definition's spojovací klíč, by default the field marked as the key here) and updates it only if the definition updates " +
+  "existing records (the default since Money S3 24.900); otherwise the record may be skipped or added. Only the fields you " +
+  "give are sent, but Money S3 may fill missing fields from the definition's presets, and documents with stock items or " +
+  "links to other documents take only selected header fields. Read the record back after m3_import_status reports it imported.";
+
+interface UpdateSpec {
+  name: string;
+  /** e.g. "an issued invoice" */
+  what: string;
+  /** Fields that identify the record; at least one changed field must come on top of them. */
+  key: z.ZodRawShape;
+  /** Changeable fields, without defaults (zod 4 applies defaults inside .partial()). */
+  fields: z.ZodRawShape;
+  definition: string;
+  mutation: string;
+  arg: string;
+  verifyWith: string;
+  label: (p: Record<string, unknown>) => string;
+  input: (p: Record<string, unknown>) => GqlInput;
+  /** Extra argument check; returns an error message. */
+  check?: (p: Record<string, unknown>) => string | undefined;
+}
+
+/** Registers an update tool: required key, every other field optional, never retried (runMutation). */
+export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpec) {
+  const fields = z.object(spec.fields).partial().shape;
+  server.tool(
+    spec.name,
+    `Update ${spec.what}. ${UPDATE_NOTE}`,
+    { ...spec.key, ...fields, definitionShortcut: definitionParam(spec.definition) },
+    UPDATE,
+    async (p: Record<string, unknown>) => {
+      const problem =
+        spec.check?.(p) ??
+        (Object.keys(spec.fields).some((k) => p[k] !== undefined) ? undefined : `give at least one field to change besides ${Object.keys(spec.key).join(", ")}`);
+      if (problem) return errorResult(`${spec.name}: ${problem}.`);
+      return runMutation(m3, {
+        mutation: spec.mutation,
+        arg: spec.arg,
+        label: spec.label(p),
+        verifyWith: spec.verifyWith,
+        definitionShortcut: p.definitionShortcut as string,
+        input: spec.input(p),
+      });
+    },
+  );
 }
