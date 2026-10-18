@@ -10,7 +10,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 export const AGENDA = "00000000-0000-4000-8000-0000000000aa";
 
-/** Default answer: every root field gets an empty page or a successful mutation result. */
+/**
+ * Default answer: every root field gets an empty page or a successful mutation
+ * result; an update tool's lookup (a page selecting only __typename) finds one record.
+ */
 export function defaultData(query) {
   const op = parse(query).definitions[0];
   const data = {};
@@ -19,7 +22,9 @@ export function defaultData(query) {
     if (op.operation === "mutation") data[name] = { guid: "00000000-0000-4000-8000-0000000000bb", isSuccess: true };
     else if (name === "importStatus") data[name] = { guid: "00000000-0000-4000-8000-0000000000bb", state: "IMPORTED", stateInfo: "Synthetic" };
     else if (name === "agendas") data[name] = { items: [{ guid: AGENDA, name: "Synthetic agenda" }] };
-    else if (name === "years") data[name] = [{ year: 2026, dateFrom: "2026-01-01T00:00:00.000+01:00", dateTo: "2026-12-31T00:00:00.000+01:00" }];
+    else if (root.selectionSet.selections[0].selectionSet?.selections.some((s) => s.name.value === "__typename")) {
+      data[name] = { items: [{ __typename: "Synthetic", isDeleted: false }], totalCount: 1 };
+    } else if (name === "years") data[name] = [{ year: 2026, dateFrom: "2026-01-01T00:00:00.000+01:00", dateTo: "2026-12-31T00:00:00.000+01:00" }];
     else data[name] = { items: [], totalCount: 0 };
   }
   return data;

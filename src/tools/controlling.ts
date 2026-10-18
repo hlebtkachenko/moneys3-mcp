@@ -48,9 +48,12 @@ export function registerControllingTools(server: McpServer, m3: MoneyS3Client) {
     updateTool(server, m3, {
       name: `m3_update_${suffix}`,
       what: `one of the ${what}`,
-      key: { code: z.string().min(1).describe("Shortcut code of the record to update (key)") },
+      match: { code: z.string().min(1).describe("Shortcut code of the record to update (key)") },
       fields: { name: z.string().min(1).describe("Name"), note: z.string().describe("Note") },
-      definition: def,
+      // Projects import through the standard _ZAK definition (the create default _ZK is from the examples).
+      definition: suffix === "project" ? "_ZAK" : def,
+      // Code lists exist once per accounting year: one or more matches.
+      lookup: { root, where: (p) => ({ shortCut: { eq: p.code as string } }), unique: false },
       mutation: `update${mutation}`,
       arg,
       verifyWith: readTool,

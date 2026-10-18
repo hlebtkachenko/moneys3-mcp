@@ -190,12 +190,17 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_stock_card",
     what: "a stock card (article)",
-    key: {
+    match: {
       catalogue: z.string().min(1).describe("Catalogue number of the card to update (key)"),
       guid: z.guid().optional().describe("Article GUID (key, when the definition matches on GUID)"),
     },
     fields: { ...articleFields, description: z.string().min(1).describe("Article name (popis zásoby)") },
-    definition: "_zSK",
+    definition: "_KK",
+    lookup: {
+      root: "articles",
+      where: (p) => ({ catalogue: { eq: p.catalogue as string }, guid: p.guid ? { eq: p.guid as string } : undefined }),
+      unique: true,
+    },
     mutation: "updateArticle",
     arg: "article",
     verifyWith: "m3_stock_cards",
@@ -245,7 +250,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_stock_document",
     what: "a received stock slip's description, title, note and texts (Money S3 updates only these header fields on stock documents)",
-    key: { documentNumber: z.string().min(1).describe("Document number of the stock slip to update (key)") },
+    match: { documentNumber: z.string().min(1).describe("Document number of the stock slip to update (key)") },
     fields: {
       description: z.string().describe("Description (popis dokladu)"),
       documentTitle: z.string().describe("Document title (nadpis dokladu)"),
@@ -254,6 +259,7 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
       textBehindPrices: z.string().describe("Text after prices"),
     },
     definition: "_S",
+    lookup: { root: "receivedSlips", where: (p) => ({ documentNumber: { eq: p.documentNumber as string } }), unique: true },
     mutation: "updateReceivedSlip",
     arg: "receivedSlip",
     verifyWith: "m3_stock_documents",
@@ -291,9 +297,14 @@ export function registerStockTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_inventory_document",
     what: "a stocktaking document; items given are sent as counted amounts",
-    key: stockTakingKey,
+    match: stockTakingKey,
     fields: stockTakingFields,
     definition: "_INVD",
+    lookup: {
+      root: "stockTakingDocuments",
+      where: (p) => ({ stockTakingId: { eq: p.stockTakingId as number }, stockTakingDocumentId: { eq: p.stockTakingDocumentId as number } }),
+      unique: true,
+    },
     mutation: "updateStockTakingDocument",
     arg: "stockTakingDocument",
     verifyWith: "m3_inventory_documents",

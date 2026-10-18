@@ -56,12 +56,16 @@ const ROOTS = {
   m3_delete_internal_document: ["deleteInternalDocument"], m3_delete_liability: ["deleteLiability"], m3_delete_receivable: ["deleteReceivable"],
   m3_delete_bank_document: ["deleteBankStatement"], m3_delete_cash_desk_document: ["deleteCashVoucher"], m3_delete_stock_card: ["deleteArticle"],
   m3_delete_stock_document: ["deleteReceivedSlip"], m3_delete_inventory_document: ["deleteStockTakingDocument"], m3_create_wage: ["createWage"],
-  m3_update_issued_invoice: ["updateIssuedInvoice"], m3_update_received_invoice: ["updateReceivedInvoice"], m3_update_address: ["updateCompany"],
-  m3_update_stock_card: ["updateArticle"], m3_update_stock_document: ["updateReceivedSlip"], m3_update_inventory_document: ["updateStockTakingDocument"],
-  m3_update_bank_document: ["updateBankStatement"], m3_update_cash_desk_document: ["updateCashVoucher"],
-  m3_update_internal_document: ["updateInternalDocument"], m3_update_liability: ["updateLiability"], m3_update_receivable: ["updateReceivable"],
-  m3_update_cost_center: ["updateCentre"], m3_update_project: ["updateJobOrder"], m3_update_activity: ["updateOperation"],
-  m3_update_account: ["updateAccountChart"], m3_update_predefined_entry: ["updateAccountAssignmentAcc"], m3_update_wage: ["updateWage"],
+  // Updates read the record first, then write.
+  m3_update_issued_invoice: ["issuedInvoices", "updateIssuedInvoice"], m3_update_received_invoice: ["receivedInvoices", "updateReceivedInvoice"],
+  m3_update_address: ["companies", "updateCompany"], m3_update_stock_card: ["articles", "updateArticle"],
+  m3_update_stock_document: ["receivedSlips", "updateReceivedSlip"], m3_update_inventory_document: ["stockTakingDocuments", "updateStockTakingDocument"],
+  m3_update_bank_document: ["bankStatements", "updateBankStatement"], m3_update_cash_desk_document: ["cashVouchers", "updateCashVoucher"],
+  m3_update_internal_document: ["internalDocuments", "updateInternalDocument"], m3_update_liability: ["liabilities", "updateLiability"],
+  m3_update_receivable: ["receivables", "updateReceivable"], m3_update_cost_center: ["centres", "updateCentre"],
+  m3_update_project: ["jobOrders", "updateJobOrder"], m3_update_activity: ["operations", "updateOperation"],
+  m3_update_account: ["accountCharts", "updateAccountChart"], m3_update_predefined_entry: ["accountAssignmentAccs", "updateAccountAssignmentAcc"],
+  m3_update_wage: ["employees", "updateWage"],
   m3_code_lists: ["jobOrderTypes"], m3_years: ["years"], m3_exchange_rates: ["exchangeLists"], m3_vat_accounting: ["vatAccountingAccs"],
   m3_stock_takings: ["stockTakings"],
 };
@@ -330,7 +334,8 @@ test("update tools send only the key and the changed fields, refuse key-only cal
   assert.ok(!r.isError, text(r));
   assert.deepEqual(rootOf(last()), ["updateIssuedInvoice"]);
   assert.deepEqual(sentInput(), { documentNumber: "FV2026001", variableSymbol: "2026001" });
-  assert.match(last(), /definitionXMLTransfer: \{ shortCut: "_FP\+FV" \}/);
+  assert.match(last(), /definitionXMLTransfer: \{ shortCut: "UPD_FP\+FV" \}/);
+  assert.match(fake.requests.at(-2).query, /issuedInvoices\(take: 10, where: \{ documentNumber: \{ eq: "FV2026001" \} \}\)/);
 
   fake.requests.length = 0;
   const empty = await call("m3_update_liability", { documentNumber: "ZV001", year: 2026 });
@@ -369,15 +374,17 @@ test("update tools send only the key and the changed fields, refuse key-only cal
   assert.deepEqual(sentInput(), { shortCut: "CC1", note: "Synthetic" });
 
   fake.requests.length = 0;
-  fake.respond = () => {
+  fake.respond = (query) => {
+    if (!query.startsWith("mutation")) return Response.json({ data: defaultData(query) });
     throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
   };
   const lost = await call("m3_update_receivable", { documentNumber: "PH001", description: "Synthetic" });
   assert.ok(lost.isError);
   assert.match(text(lost), /Outcome unknown.*m3_receivables/s);
-  assert.equal(fake.requests.length, 1);
+  assert.equal(fake.requests.length, 2, "one lookup, one mutation, no resend");
 
-  fake.respond = (query) => Response.json({ data: { updateCentre: { guid: "00000000-0000-4000-8000-0000000000bb", isSuccess: false } } });
+  fake.respond = (query) =>
+    Response.json({ data: query.startsWith("mutation") ? { updateCentre: { guid: "00000000-0000-4000-8000-0000000000bb", isSuccess: false } } : defaultData(query) });
   const rejected = await call("m3_update_cost_center", { code: "CC1", name: "Synthetic" });
   assert.ok(rejected.isError);
   assert.match(text(rejected), /did not accept/);
@@ -389,4 +396,35 @@ test("enum arguments take the live schema's values", async () => {
   const ok = await call("m3_create_account", { account: "211", type: "BALANCE_SHEET", subtype1: "ACTIVE" });
   assert.ok(!ok.isError, text(ok));
   assert.deepEqual([sentInput().type, sentInput().subtype1], ["BALANCE_SHEET", "ACTIVE"]);
+});
+
+test("updates read the record first and send nothing when it is missing, ambiguous or deleted", async () => {
+  const page = (items) => (query) =>
+    Response.json({ data: query.startsWith("mutation") ? defaultData(query) : { [rootOf(query)[0]]: { items, totalCount: items.length } } });
+  const mutations = () => fake.requests.filter((r) => r.query.startsWith("mutation")).length;
+
+  fake.respond = page([]);
+  const missing = await call("m3_update_issued_invoice", { documentNumber: "NOPE", description: "Synthetic" });
+  assert.ok(missing.isError);
+  assert.match(text(missing), /no issuedInvoices record matches.*nothing was sent/);
+
+  fake.respond = page([{ __typename: "ILiability", isDeleted: true }]);
+  const deleted = await call("m3_update_liability", { documentNumber: "ZV1", description: "Synthetic" });
+  assert.match(text(deleted), /no liabilities record matches/);
+
+  fake.respond = page([{ __typename: "ICompany" }, { __typename: "ICompany" }]);
+  const twice = await call("m3_update_address", { identificationNumber: "12345678", email: "info@example.com" });
+  assert.match(text(twice), /2 companies records match.*narrow the key/);
+  assert.match(fake.requests.at(-1).query, /identificationNumber: \{ eq: "12345678" \}/);
+  assert.equal(mutations(), 0);
+
+  // Year-scoped code lists may match once per year.
+  const perYear = await call("m3_update_cost_center", { code: "CC1", name: "Synthetic" });
+  assert.ok(!perYear.isError, text(perYear));
+  assert.equal(mutations(), 1);
+
+  fake.respond = () => new Response("down", { status: 503 });
+  const down = await call("m3_update_liability", { documentNumber: "ZV1", year: 2026, description: "Synthetic" });
+  assert.match(text(down), /could not read the record before updating, nothing was sent/);
+  assert.equal(mutations(), 1);
 });

@@ -137,12 +137,19 @@ export function registerContactTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_address",
     what: "an address book entry, found by GUID, partner code or IČO (whichever the definition uses as key)",
-    key: {
+    match: {
       guid: z.guid().optional().describe("Address GUID (key, see m3_address_book)"),
       code: z.string().min(1).optional().describe("Partner code (key, kód partnera)"),
     },
     fields: { ...addressFields, name: z.string().min(1).describe("Company or person name") },
-    definition: "_AD",
+    definition: "_ADR",
+    // Find by the key the call gives, in the order the definition would most likely use.
+    lookup: {
+      root: "companies",
+      where: (p) =>
+        p.guid ? { guid: { eq: p.guid as string } } : p.code ? { code: { eq: p.code as string } } : { identificationNumber: { eq: p.identificationNumber as string } },
+      unique: true,
+    },
     mutation: "updateCompany",
     arg: "company",
     verifyWith: "m3_address_book",

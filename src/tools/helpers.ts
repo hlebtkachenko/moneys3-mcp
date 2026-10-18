@@ -287,24 +287,22 @@ export async function listTool(
 // Updates
 
 const UPDATE_NOTE =
-  "Goes through the Money S3 import queue like a create. Money S3 finds the existing record by its key (the XML transfer " +
-  "definition's spojovací klíč, by default the field marked as the key here) and updates it only if the definition updates " +
-  "existing records (the default since Money S3 24.900); a key that matches nothing may be skipped or added as a new record. " +
-  "Only the fields you give are sent (leave a field out to keep it; empty strings and lists are refused), but Money S3 may " +
-  "fill missing fields from the definition's presets. Documents with stock items or links to other documents take only " +
-  "selected header fields, and documents Money S3 would not let you edit (locked period, paid) are refused. Read the record " +
-  "back after m3_import_status reports it imported.";
+  "Goes through the Money S3 import queue like a create. Before sending, the tool reads the record by its key and refuses " +
+  "if none matches (or, for documents, addresses and stock cards, more than one). Money S3 then finds the record by the " +
+  "XML transfer definition's key (spojovací klíč). The default definition is a dedicated update definition (UPD plus the " +
+  "standard shortcut) that must exist in Money S3 with new records and records without a key set to error, so a miss " +
+  "cannot create a record. Only the fields you give are sent (leave a field out to keep it; empty strings and lists are " +
+  "refused), but Money S3 may fill missing fields from the definition's presets. Documents with stock items or links to " +
+  "other documents take only selected header fields, and documents Money S3 would not let you edit (locked period, paid) " +
+  "are refused. Read the record back after m3_import_status reports it imported.";
 
 /** Dotted path of the first empty string or empty list in the arguments, if any. */
-function findBlank(value: unknown, path = ""): string | undefined {
-  if (value === "" || (Array.isArray(value) && !value.length)) return path || "value";
-  if (value && typeof value === "object") {
-    for (const [k, v] of Object.entries(value)) {
-      const found = findBlank(v, path ? `${path}.${k}` : k);
-      if (found) return found;
-    }
-  }
-  return undefined;
+function findBlank(value: unknown, path: string): string | undefined {
+  if (value === "" || (Array.isArray(value) && !value.length)) return path;
+  if (!value || typeof value !== "object") return undefined;
+  return Object.entries(value)
+    .map(([k, v]) => findBlank(v, path ? `${path}.${k}` : k))
+    .find(Boolean);
 }
 
 interface UpdateSpec {
@@ -312,10 +310,20 @@ interface UpdateSpec {
   /** e.g. "an issued invoice" */
   what: string;
   /** Fields that identify the record; at least one changed field must come on top of them. */
-  key: z.ZodRawShape;
+  match: z.ZodRawShape;
   /** Changeable fields, without defaults (zod 4 applies defaults inside .partial()). */
   fields: z.ZodRawShape;
+  /** Standard definition the update definition copies; the default is `UPD${definition}`. */
   definition: string;
+  /** Read-before-write: the collection and filter that must find the record before anything is sent. */
+  lookup: {
+    root: string;
+    where: (p: Record<string, unknown>) => GqlInput;
+    /** Documents, addresses, stock cards: exactly one match. Year-scoped code lists: one or more. */
+    unique: boolean;
+    /** The item type has isDeleted; soft-deleted matches do not count. */
+    deleted?: boolean;
+  };
   mutation: string;
   arg: string;
   verifyWith: string;
@@ -325,25 +333,53 @@ interface UpdateSpec {
   check?: (p: Record<string, unknown>) => string | undefined;
 }
 
-/** Registers an update tool: required key, every other field optional, never retried (runMutation). */
+/** Refusal message when the update's record is not found as required, else undefined. */
+async function lookupProblem(m3: MoneyS3Client, lookup: UpdateSpec["lookup"], p: Record<string, unknown>): Promise<string | undefined> {
+  const where = gqlValue(lookup.where(p));
+  const gql = `{ ${lookup.root}(take: 10, where: ${where}) { items { __typename${lookup.deleted ? " isDeleted" : ""} } totalCount } }`;
+  m3.cache.invalidate(); // a cached page could hide a create or delete made since
+  const data = await m3.query<Record<string, Connection>>(gql);
+  const live = (data[lookup.root]?.items ?? []).filter((item) => !item.isDeleted).length;
+  if (!live) return `no ${lookup.root} record matches ${where}; nothing was sent`;
+  if (lookup.unique && live > 1) return `${live} ${lookup.root} records match ${where}; narrow the key (for example with the year); nothing was sent`;
+  return undefined;
+}
+
+/**
+ * Registers an update tool: required key, every other field optional, the
+ * record read first, the write never retried (runMutation).
+ */
 export function updateTool(server: McpServer, m3: MoneyS3Client, spec: UpdateSpec) {
   const fields = z.object(spec.fields).partial().shape;
   if (Object.keys(z.object(fields).parse({})).length) throw new Error(`${spec.name}: update fields must not have defaults`);
+  const matchNames = Object.keys(spec.match);
   server.tool(
     spec.name,
     `Update ${spec.what}. ${UPDATE_NOTE}`,
-    { ...spec.key, ...fields, definitionShortcut: definitionParam(spec.definition) },
+    {
+      ...spec.match,
+      ...fields,
+      definitionShortcut: definitionParam(`UPD${spec.definition}`).describe(
+        `XML transfer definition for the update: a copy of ${spec.definition} with new records and records without a key set to error`,
+      ),
+    },
     UPDATE,
     async (p: Record<string, unknown>) => {
-      const blank = findBlank(p);
+      const blank = findBlank(p, "");
       const input = spec.input(p);
       // Compare what would be sent, not the arguments: mappers drop some values.
-      const keyOnly = spec.input(Object.fromEntries(Object.keys(spec.key).map((k) => [k, p[k]])));
+      const matchOnly = spec.input(Object.fromEntries(matchNames.map((k) => [k, p[k]])));
       const problem =
         (blank && `${blank} is empty; leave a field out to keep it`) ||
         spec.check?.(p) ||
-        (gqlValue(input) === gqlValue(keyOnly) && `give at least one field to change besides ${Object.keys(spec.key).join(", ")}`);
+        (gqlValue(input) === gqlValue(matchOnly) && `give at least one field to change besides ${matchNames.join(", ")}`);
       if (problem) return errorResult(`${spec.name}: ${problem}.`);
+      try {
+        const missing = await lookupProblem(m3, spec.lookup, p);
+        if (missing) return errorResult(`${spec.name}: ${missing}.`);
+      } catch (err) {
+        return errorResult(`${spec.name}: could not read the record before updating, nothing was sent: ${(err as Error).message}`);
+      }
       return runMutation(m3, {
         mutation: spec.mutation,
         arg: spec.arg,

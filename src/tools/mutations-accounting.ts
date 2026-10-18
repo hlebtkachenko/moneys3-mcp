@@ -91,9 +91,11 @@ export function registerAccountingMutationTools(server: McpServer, m3: MoneyS3Cl
   updateTool(server, m3, {
     name: "m3_update_account",
     what: "an account in the chart of accounts",
-    key: { account: z.string().min(1).describe("Account number to update (key)") },
+    match: { account: z.string().min(1).describe("Account number to update (key)") },
     fields: accountFields,
     definition: "_UC",
+    // Accounts exist once per accounting year: one or more matches.
+    lookup: { root: "accountCharts", where: (p) => ({ account: { eq: p.account as string } }), unique: false },
     mutation: "updateAccountChart",
     arg: "accountChart",
     verifyWith: "m3_chart_of_accounts",
@@ -125,9 +127,10 @@ export function registerAccountingMutationTools(server: McpServer, m3: MoneyS3Cl
   updateTool(server, m3, {
     name: "m3_update_predefined_entry",
     what: "a predefined accounting entry (předkontace)",
-    key: { shortCut: z.string().min(1).describe("Shortcut of the entry to update (key)") },
+    match: { shortCut: z.string().min(1).describe("Shortcut of the entry to update (key)") },
     fields: entryFields,
     definition: "_PK",
+    lookup: { root: "accountAssignmentAccs", where: (p) => ({ shortCut: { eq: p.shortCut as string } }), unique: false },
     mutation: "updateAccountAssignmentAcc",
     arg: "accountAssignmentAcc",
     verifyWith: "m3_predefined_entries",

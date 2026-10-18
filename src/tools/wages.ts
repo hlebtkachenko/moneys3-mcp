@@ -49,9 +49,11 @@ export function registerWageTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_wage",
     what: "a monthly wage (mzda), found by employee, year and month",
-    key: wageKey,
+    match: wageKey,
     fields: { employmentRelationships, note: z.string().describe("Note") },
     definition: "_MZDY",
+    // The API has no wage query: only the employee is checked; the update definition keeps a miss from adding a wage.
+    lookup: { root: "employees", where: (p) => ({ personalNumber: { eq: p.personalNumber as string } }), unique: true },
     mutation: "updateWage",
     arg: "wage",
     verifyWith: "the wage in Money S3 (the API has no wage query)",

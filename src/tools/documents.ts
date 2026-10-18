@@ -120,6 +120,11 @@ const internalInput = (p: Internal) => ({
 const { partner: _p1, ...internalUpdateFields } = internalFields;
 const { partner: _p2, ...receivableLiabilityUpdateFields } = receivableLiabilityFields;
 
+const documentWhere = (p: Record<string, unknown>) => ({
+  documentNumber: { eq: p.documentNumber as string },
+  year: p.year ? { eq: p.year as number } : undefined,
+});
+
 const documentKey = (what: string) => ({
   documentNumber: z.string().min(1).describe(`Document number of the ${what} to update (key)`),
   year: z.number().int().min(2000).max(2100).optional().describe("Accounting year of the document (key)"),
@@ -215,9 +220,10 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_internal_document",
     what: "an internal document's header",
-    key: documentKey("internal document"),
+    match: documentKey("internal document"),
     fields: internalUpdateFields,
     definition: "_ID",
+    lookup: { root: "internalDocuments", where: documentWhere, unique: true, deleted: true },
     mutation: "updateInternalDocument",
     arg: "internalDocument",
     verifyWith: "m3_internal_documents",
@@ -257,13 +263,14 @@ export function registerDocumentTools(server: McpServer, m3: MoneyS3Client) {
       }),
   );
 
-  for (const [kind, Kind, def] of [["liability", "Liability", "_ZV"], ["receivable", "Receivable", "_PH"]] as const) {
+  for (const [kind, Kind] of [["liability", "Liability"], ["receivable", "Receivable"]] as const) {
     updateTool(server, m3, {
       name: `m3_update_${kind}`,
       what: `a ${kind}'s header`,
-      key: documentKey(kind),
+      match: documentKey(kind),
       fields: receivableLiabilityUpdateFields,
-      definition: def,
+      definition: "_PH+ZV",
+      lookup: { root: kind === "liability" ? "liabilities" : "receivables", where: documentWhere, unique: true, deleted: true },
       mutation: `update${Kind}`,
       arg: kind,
       verifyWith: kind === "liability" ? "m3_liabilities" : "m3_receivables",

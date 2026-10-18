@@ -178,9 +178,10 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_bank_document",
     what: "a bank document's header",
-    key: documentKey("bank document"),
+    match: documentKey("bank document"),
     fields: { ...paymentUpdateFields, ...bankFields },
     definition: "_BD",
+    lookup: { root: "bankStatements", where: (p) => ({ documentNumber: { eq: p.documentNumber as string } }), unique: true, deleted: true },
     mutation: "updateBankStatement",
     arg: "bankStatement",
     verifyWith: "m3_bank_documents",
@@ -212,9 +213,10 @@ export function registerBankingTools(server: McpServer, m3: MoneyS3Client) {
   updateTool(server, m3, {
     name: "m3_update_cash_desk_document",
     what: "a cash desk document's header",
-    key: documentKey("cash desk document"),
+    match: documentKey("cash desk document"),
     fields: { ...paymentUpdateFields, ...cashFields },
     definition: "_PD",
+    lookup: { root: "cashVouchers", where: (p) => ({ documentNumber: { eq: p.documentNumber as string } }), unique: true, deleted: true },
     mutation: "updateCashVoucher",
     arg: "cashVoucher",
     verifyWith: "m3_cash_desk_documents",

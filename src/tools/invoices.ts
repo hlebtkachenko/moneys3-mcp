@@ -195,9 +195,10 @@ export function registerInvoiceTools(server: McpServer, m3: MoneyS3Client) {
     updateTool(server, m3, {
       name: `m3_update_${type}_invoice`,
       what: `${type === "issued" ? "an issued" : "a received"} invoice's header (items and partner are not sent)`,
-      key: { documentNumber: z.string().min(1).describe("Document number of the invoice to update (key)") },
+      match: { documentNumber: z.string().min(1).describe("Document number of the invoice to update (key)") },
       fields: headerUpdateFields,
       definition: "_FP+FV",
+      lookup: { root: `${type}Invoices`, where: (p) => ({ documentNumber: { eq: p.documentNumber as string } }), unique: true, deleted: true },
       mutation: `update${Type}Invoice`,
       arg: `${type}Invoice`,
       verifyWith: `m3_${type}_invoices`,
